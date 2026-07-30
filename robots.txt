@@ -1,0 +1,7 @@
+# robots.txt for Modern Living Hub
+# https://modernlivinghub.com
+
+User-agent: *
+Allow: /
+
+Sitemap: https://modernlivinghub.com/sitemap.xml
