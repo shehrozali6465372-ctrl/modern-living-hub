@@ -2,7 +2,7 @@
 
 ## Overview
 
-Modern Living Hub provides RESTful APIs for content management, Pinterest integration, and AI-powered content generation.
+Modern Living Hub provides RESTful APIs for content management, multi-platform publishing support, and AI-powered content generation.
 
 ## Authentication
 
@@ -20,7 +20,7 @@ All API requests require authentication using OAuth 2.0 bearer tokens.
 - `GET /api/v1/content/:id` — Retrieve content
 - `PUT /api/v1/content/:id` — Update content
 
-### Pinterest Integration
+### Pinterest API
 - `POST /api/v1/pinterest/pin` — Schedule a pin
 - `GET /api/v1/pinterest/analytics` — Get pin analytics
 - `GET /api/v1/pinterest/boards` — List boards
