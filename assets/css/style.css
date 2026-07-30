@@ -566,6 +566,75 @@ p { margin-bottom: 1rem; }
     color: var(--color-text-inverse);
 }
 
+/* ----- Supported Platforms ----- */
+.supported-platforms {
+    background: var(--color-bg);
+}
+
+.section-subtitle {
+    color: var(--color-text-light);
+    font-size: 1.05rem;
+    margin-top: -0.5rem;
+    margin-bottom: 2.5rem;
+    text-align: center;
+}
+
+.platforms-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 1rem;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.platform-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: var(--color-bg-alt);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: var(--transition);
+    cursor: default;
+}
+
+.platform-item:hover {
+    border-color: var(--color-primary-light);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-sm);
+}
+
+.platform-icon {
+    font-size: 1.15rem;
+    line-height: 1;
+}
+
+/* First item (Pinterest) gets a subtle highlight */
+.platform-item:first-child {
+    border-color: var(--color-primary-light);
+    background: rgba(37, 99, 235, 0.05);
+}
+
+@media (max-width: 768px) {
+    .platforms-grid {
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+        gap: 0.75rem;
+    }
+    .platform-item {
+        padding: 0.6rem 0.75rem;
+        font-size: 0.85rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .platforms-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 /* ----- Responsive ----- */
 @media (max-width: 768px) {
     h1 { font-size: 2rem; }
