@@ -21,5 +21,5 @@ To become the world's leading AI-powered content operating system.
 ## Legal
 
 - **Registered:** Delaware, United States
-- **Website:** https://modernlivinghub.com
-- **Contact:** contact@modernlivinghub.com
+- **Website:** https://shehrozali6465372-ctrl.github.io/modern-living-hub
+- **Contact:** shehrozali6465371@gmail.com

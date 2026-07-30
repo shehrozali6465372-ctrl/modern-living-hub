@@ -52,8 +52,8 @@ modern-living-hub/
 
 This site is deployed via GitHub Pages.
 
-- **Production URL:** [https://modernlivinghub.com](https://modernlivinghub.com)
-- **Repository:** [https://github.com/modernlivinghub/modern-living-hub](https://github.com/modernlivinghub/modern-living-hub)
+- **Production URL:** [https://shehrozali6465372-ctrl.github.io/modern-living-hub](https://shehrozali6465372-ctrl.github.io/modern-living-hub)
+- **Repository:** [https://github.com/shehrozali6465372-ctrl/modern-living-hub](https://github.com/shehrozali6465372-ctrl/modern-living-hub)
 
 ## License
 
@@ -61,6 +61,6 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## Contact
 
-- **Email:** contact@modernlivinghub.com
-- **GitHub:** [github.com/modernlivinghub](https://github.com/modernlivinghub)
-- **Website:** [modernlivinghub.com](https://modernlivinghub.com)
+- **Email:** shehrozali6465371@gmail.com
+- **GitHub:** [github.com/shehrozali6465372-ctrl](https://github.com/shehrozali6465372-ctrl)
+- **Website:** [shehrozali6465372-ctrl.github.io/modern-living-hub](https://shehrozali6465372-ctrl.github.io/modern-living-hub)
