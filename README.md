@@ -81,9 +81,36 @@ See `server/README.md` for full API documentation and deployment options.
 1. Create a Pinterest Developer App at https://developers.pinterest.com/apps/
 2. Enable Pinterest API v5
 3. Configure OAuth with the redirect URI matching `PINTEREST_REDIRECT_URI` from `.env`
+   (format: `https://YOUR-BACKEND-DOMAIN.com/auth/pinterest/callback`)
 4. Request Standard Access with scopes: `boards:read`, `boards:write`, `pins:read`, `pins:write`
 5. Deploy the backend (see `server/README.md` for options)
-6. Set `BACKEND_URL` in the frontend if the frontend and backend are on different domains
+6. Set the following environment variables on the backend:
+   - `PINTEREST_CLIENT_ID`
+   - `PINTEREST_CLIENT_SECRET`
+   - `PINTEREST_REDIRECT_URI` (must match Pinterest app registration exactly)
+   - `SESSION_SECRET`
+   - `FRONTEND_URL` (e.g. `https://shehrozali6465372-ctrl.github.io`)
+7. Set `window.BACKEND_URL` in `index.html` and `pinterest.html` to the deployed backend domain.
+   The frontend shows a clear configuration error if this is not set.
+
+## Backend Environment Variables
+
+| Variable                  | Required | Purpose                                            |
+|---------------------------|----------|----------------------------------------------------|
+| `PINTEREST_CLIENT_ID`     | Yes      | Pinterest developer app client ID                  |
+| `PINTEREST_CLIENT_SECRET` | Yes      | Pinterest app secret (server-side only)            |
+| `PINTEREST_REDIRECT_URI`  | Yes      | Exact callback URL registered in Pinterest app     |
+| `SESSION_SECRET`          | Yes      | Random string for session encryption               |
+| `FRONTEND_URL`            | Yes      | Frontend origin for OAuth redirect + CORS allowlist|
+| `NODE_ENV`                | No       | Set `production` for secure HTTPS cookies          |
+
+## Cross-Origin Deployment Notes
+
+- **Frontend:** GitHub Pages (`https://shehrozali6465372-ctrl.github.io`)
+- **Backend:** Separate Node.js server on its own HTTPS domain
+- Backend CORS allows only the configured `FRONTEND_URL` (no wildcards).
+- Production sessions use `SameSite=None` + `Secure=true` so cross-origin
+  requests from the GitHub Pages frontend can be authenticated.
 
 ## License
 

@@ -168,9 +168,28 @@
 
     <script src="assets/js/main.js" defer></script>
     <script>
-      // Configure this to your backend URL if the frontend and backend are on different domains.
-      // If empty, the current origin is used (for same-origin deployments).
-      window.BACKEND_URL = '';
+      // ─── Backend URL configuration ───
+      // Set this to the deployed backend domain (no trailing slash).
+      // All Pinterest API calls (OAuth, boards, pins) go through this backend.
+      // The backend MUST be running and accessible from the browser for Pinterest features to work.
+      window.BACKEND_URL = 'https://YOUR-BACKEND-DOMAIN.com';
+
+      // Show a clear error if BACKEND_URL was never configured
+      if (!window.BACKEND_URL || window.BACKEND_URL.includes('YOUR-BACKEND')) {
+        document.addEventListener('DOMContentLoaded', function () {
+          var banners = document.querySelectorAll('.btn-pinterest');
+          banners.forEach(function (btn) {
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.5';
+            btn.title = 'Pinterest integration requires backend URL configuration';
+          });
+          var errDiv = document.createElement('div');
+          errDiv.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;margin-top:12px;color:#991b1b;font-size:0.85rem;';
+          errDiv.textContent = '⚠️ Pinterest integration is not configured yet. The backend URL must be set in the source code before this feature works.';
+          var heroActions = document.querySelector('.hero-actions') || document.getElementById('disconnected-state') || document.querySelector('main');
+          if (heroActions) heroActions.appendChild(errDiv);
+        });
+      }
     </script>
     <script src="assets/js/pinterest.js" defer></script>
 </body>

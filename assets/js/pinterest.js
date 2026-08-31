@@ -3,28 +3,28 @@
  * Handles OAuth status, board listing, pin creation, and board creation
  * via the server-side backend API.
  *
- * The backend URL defaults to the current origin.
- * In development (GitHub Pages → local backend), set BACKEND_URL
- * as a global variable before this script loads.
+ * The backend URL is configured in each page via:
+ *   window.BACKEND_URL = 'https://your-backend-domain.com';
+ * All Pinterest API calls (OAuth, status, boards, pins, disconnect)
+ * use this single value.
  */
 
 (function () {
     'use strict';
 
     // ─── Configuration ───
-    const BACKEND = window.BACKEND_URL || '';
+    const BACKEND = (window.BACKEND_URL || '').replace(/\/+$/, ''); // strip trailing slashes
 
-    // Update Connect Pinterest links to point to backend OAuth
-    function updateConnectLinks() {
-        const authUrl = BACKEND + '/auth/pinterest';
-        if (connectBtn) {
-            connectBtn.href = authUrl;
+    // ─── Backend availability helpers ───
+    function isBackendConfigured() {
+        return Boolean(BACKEND) && !BACKEND.includes('YOUR-BACKEND');
+    }
+
+    function showConfigError(msg, elem) {
+        if (elem) {
+            elem.innerHTML = '⚠️ ' + msg;
+            elem.style.color = 'var(--color-error)';
         }
-        document.querySelectorAll('a.btn-pinterest').forEach(function (link) {
-            if (link.id !== 'disconnect-pinterest-btn') {
-                link.href = authUrl;
-            }
-        });
     }
 
     // ─── DOM references ───
@@ -43,11 +43,27 @@
     const pinResult = document.getElementById('pin-result');
     const disconnectError = document.getElementById('disconnect-error');
 
+    // ─── Update Connect Pinterest links to point to backend OAuth ───
+    function updateConnectLinks() {
+        const authUrl = isBackendConfigured() ? BACKEND + '/auth/pinterest' : '#';
+        document.querySelectorAll('a.btn-pinterest').forEach(function (link) {
+            if (link.id !== 'disconnect-pinterest-btn') {
+                link.href = authUrl;
+            }
+        });
+
+        if (!isBackendConfigured()) {
+            document.querySelectorAll('a.btn-pinterest').forEach(function (link) {
+                link.style.pointerEvents = 'none';
+                link.style.opacity = '0.5';
+            });
+        }
+    }
+
     // ─── Handle OAuth return params ───
     function handleUrlParams() {
         const params = new URLSearchParams(window.location.search);
         if (params.get('pinterest_connected') === '1') {
-            // Clear the URL parameter
             window.history.replaceState({}, '', window.location.pathname);
             showConnectedUI();
         }
@@ -60,6 +76,11 @@
 
     // ─── Check connection status on page load ───
     async function checkStatus() {
+        if (!isBackendConfigured()) {
+            showConfigError('Backend not configured. Set window.BACKEND_URL in the page source.', disconnectError || statusBanner);
+            showDisconnectedUI();
+            return;
+        }
         try {
             const res = await fetch(`${BACKEND}/api/pinterest/status`, {
                 credentials: 'include'
@@ -71,7 +92,6 @@
                 showDisconnectedUI();
             }
         } catch {
-            // If backend is not reachable, assume not connected
             showDisconnectedUI();
         }
     }
@@ -92,9 +112,9 @@
     function showDisconnectedUI() {
         if (connectBtn) {
             connectBtn.textContent = '📌 Connect Pinterest';
-            connectBtn.href = BACKEND + '/auth/pinterest';
-            connectBtn.style.pointerEvents = '';
-            connectBtn.style.opacity = '';
+            connectBtn.href = isBackendConfigured() ? BACKEND + '/auth/pinterest' : '#';
+            connectBtn.style.pointerEvents = isBackendConfigured() ? '' : 'none';
+            connectBtn.style.opacity = isBackendConfigured() ? '' : '0.5';
         }
         if (statusBanner) statusBanner.style.display = 'none';
         if (connectedState) connectedState.style.display = 'none';
@@ -104,6 +124,10 @@
     // ─── Load user's Pinterest boards ───
     async function loadBoards() {
         if (!boardSelect) return;
+        if (!isBackendConfigured()) {
+            boardSelect.innerHTML = '<option value="">Backend not configured</option>';
+            return;
+        }
         boardSelect.innerHTML = '<option value="">Loading boards…</option>';
         try {
             const res = await fetch(`${BACKEND}/api/pinterest/boards`, {
@@ -132,6 +156,10 @@
 
     // ─── Disconnect Pinterest ───
     async function disconnectPinterest() {
+        if (!isBackendConfigured()) {
+            showError(disconnectError, 'Backend not configured.');
+            return;
+        }
         try {
             const res = await fetch(`${BACKEND}/api/pinterest/disconnect`, {
                 method: 'POST',
@@ -152,6 +180,13 @@
     if (createBoardForm) {
         createBoardForm.addEventListener('submit', async function (e) {
             e.preventDefault();
+            if (!isBackendConfigured()) {
+                if (boardResult) {
+                    boardResult.textContent = '❌ Backend not configured.';
+                    boardResult.style.color = 'var(--color-error)';
+                }
+                return;
+            }
             const name = document.getElementById('board-name').value.trim();
             const description = document.getElementById('board-description').value.trim();
             if (!name) return;
@@ -187,6 +222,13 @@
     if (createPinForm) {
         createPinForm.addEventListener('submit', async function (e) {
             e.preventDefault();
+            if (!isBackendConfigured()) {
+                if (pinResult) {
+                    pinResult.textContent = '❌ Backend not configured.';
+                    pinResult.style.color = 'var(--color-error)';
+                }
+                return;
+            }
             const boardId = boardSelect ? boardSelect.value : '';
             const imageUrl = document.getElementById('pin-image-url').value.trim();
             const title = document.getElementById('pin-title').value.trim();
@@ -229,7 +271,6 @@
                 pinResult.innerHTML = '✅ Pin published successfully! Pin ID: <strong>' + escapeHtml(data.pin.id) + '</strong>';
                 pinResult.style.color = 'var(--color-success)';
                 createPinForm.reset();
-                // Restore the board select
                 loadBoards();
             } catch {
                 pinResult.textContent = '❌ Could not reach the server. Please try again.';
@@ -243,9 +284,9 @@
         homeDisconnectBtn.addEventListener('click', disconnectPinterest);
     }
 
-    const disconnectBtnPinned = document.getElementById('disconnect-pinterest-btn');
-    if (disconnectBtnPinned && disconnectBtnPinned !== homeDisconnectBtn) {
-        disconnectBtnPinned.addEventListener('click', disconnectPinterest);
+    const disconnectBtnOnPage = document.getElementById('disconnect-pinterest-btn');
+    if (disconnectBtnOnPage && disconnectBtnOnPage !== homeDisconnectBtn) {
+        disconnectBtnOnPage.addEventListener('click', disconnectPinterest);
     }
 
     // ─── Helpers ───

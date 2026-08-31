@@ -7,6 +7,7 @@
  *   PINTEREST_CLIENT_SECRET — Pinterest app client secret (server-side only)
  *   PINTEREST_REDIRECT_URI  — Exact callback URL registered with Pinterest
  *   SESSION_SECRET          — Secret for express-session
+ *   FRONTEND_URL            — The deployed frontend origin (e.g. https://shehrozali6465372-ctrl.github.io)
  */
 
 import express from "express";
@@ -22,11 +23,19 @@ const CLIENT_ID = process.env.PINTEREST_CLIENT_ID;
 const CLIENT_SECRET = process.env.PINTEREST_CLIENT_SECRET;
 const REDIRECT_URI = process.env.PINTEREST_REDIRECT_URI;
 const SESSION_SECRET = process.env.SESSION_SECRET;
+const FRONTEND_URL = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+
+const isProduction = process.env.NODE_ENV === "production";
 
 if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI || !SESSION_SECRET) {
   console.error(
     "Missing required environment variables. Check PINTEREST_CLIENT_ID, PINTEREST_CLIENT_SECRET, PINTEREST_REDIRECT_URI, SESSION_SECRET."
   );
+  process.exit(1);
+}
+
+if (!FRONTEND_URL) {
+  console.error("Missing FRONTEND_URL environment variable. Set it to the deployed frontend origin.");
   process.exit(1);
 }
 
@@ -43,6 +52,12 @@ app.set("trust proxy", 1);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ─── Session configuration ───
+// In production (GitHub Pages frontend on different origin):
+//   - SameSite=None is required so the cookie is sent on cross-origin requests from the frontend
+//   - Secure=true is required by browsers when SameSite=None
+// In development:
+//   - SameSite="lax" is sufficient for localhost
 app.use(
   session({
     name: "mlh.sid",
@@ -51,16 +66,19 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production", // HTTPS in production
-      sameSite: "lax",
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
       maxAge: 1000 * 60 * 60 * 24 * 7 // 7 days
     }
   })
 );
 
-// ─── CORS (allow the GitHub Pages frontend) ───
+// ─── CORS ───
+// Only allow the actual frontend origin.
+// Production: https://shehrozali6465372-ctrl.github.io
+// Development: localhost origins
 const allowedOrigins = [
-  "https://shehrozali6465372-ctrl.github.io",
+  FRONTEND_URL,
   "http://localhost:5500",
   "http://127.0.0.1:5500",
   "http://localhost:8000",
@@ -112,9 +130,16 @@ function buildAuthUrl(state) {
 
 // ─── Routes ───
 
-// Health check
+// Health check — safe diagnostics, never exposes secrets
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", service: "modern-living-hub-backend" });
+  res.json({
+    status: "ok",
+    service: "modern-living-hub-backend",
+    pinterest_client_id_configured: Boolean(CLIENT_ID),
+    redirect_uri_configured: Boolean(REDIRECT_URI),
+    frontend_url_configured: Boolean(FRONTEND_URL),
+    production_mode: isProduction
+  });
 });
 
 // ─── Step 1: Start OAuth — GET /auth/pinterest ───
@@ -140,16 +165,16 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       error === "access_denied"
         ? "You denied the Pinterest authorization request."
         : error_description || "Pinterest authorization failed.";
-    return res.redirect(`/?pinterest_error=${encodeURIComponent(msg)}`);
+    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(msg)}`);
   }
 
   if (!code || !state) {
-    return res.redirect("/?pinterest_error=Missing authorization code or state.");
+    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Missing authorization code or state.`);
   }
 
   // Validate state (CSRF protection)
   if (!req.session.oauth_state || state !== req.session.oauth_state) {
-    return res.redirect("/?pinterest_error=Invalid OAuth state. Please try again.");
+    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Invalid OAuth state. Please try again.`);
   }
   delete req.session.oauth_state;
 
@@ -175,11 +200,11 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 
     if (!tokenRes.ok) {
       console.error("Token exchange failed:", tokenRes.status);
-      return res.redirect(`/?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token.")}`);
+      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token.")}`);
     }
 
     if (!tokenData.access_token) {
-      return res.redirect("/?pinterest_error=No access token returned by Pinterest.");
+      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=No access token returned by Pinterest.`);
     }
 
     // Store the token server-side only
@@ -189,11 +214,11 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       connected_at: new Date().toISOString()
     };
     req.session.save(() => {
-      res.redirect("/?pinterest_connected=1");
+      res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1`);
     });
   } catch (err) {
     console.error("OAuth callback error:", err.message);
-    res.redirect("/?pinterest_error=Network error during Pinterest authentication.");
+    res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Network error during Pinterest authentication.")}`);
   }
 });
 
@@ -375,4 +400,6 @@ function handleApiError(status, res) {
 app.listen(PORT, () => {
   console.log(`Modern Living Hub backend running on http://localhost:${PORT}`);
   console.log(`Pinterest OAuth redirect URI: ${REDIRECT_URI}`);
+  console.log(`Frontend URL: ${FRONTEND_URL}`);
+  console.log(`Production mode: ${isProduction}`);
 });
