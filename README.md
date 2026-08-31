@@ -7,7 +7,7 @@ Modern Living Hub is a cutting-edge Universal AI Content Operating System that c
 ## Features
 
 - **Universal AI Content OS** — End-to-end content management powered by artificial intelligence
-- **Pinterest API Ready** — Pinterest API support for automated pinning, scheduling, and analytics (first platform integration)
+- **Pinterest API Integration** — Real Pinterest OAuth 2.0 authentication, board management, and pin publishing via Pinterest API v5
 - **AI Publishing Platform** — Intelligent content generation, optimization, and multi-channel distribution
 - **Responsive Design** — Mobile-friendly, accessible, and SEO-optimized
 
@@ -15,14 +15,19 @@ Modern Living Hub is a cutting-edge Universal AI Content Operating System that c
 
 ```
 modern-living-hub/
+├── server/                     ← Node.js + Express backend (Pinterest OAuth + API)
+│   ├── src/
+│   │   └── server.js           ← Main Express server
+│   ├── .env.example            ← Template for environment variables
+│   ├── package.json
+│   └── README.md               ← Backend setup and API documentation
 ├── assets/
 │   ├── css/
-│   │   └── style.css
+│   │   └── style.css           ← Includes Pinterest integration styles
 │   ├── js/
-│   │   └── main.js
+│   │   ├── main.js             ← Core site JavaScript
+│   │   └── pinterest.js        ← Pinterest OAuth + API frontend JS
 │   └── images/
-│       ├── logo.png
-│       └── logo.svg
 ├── docs/
 │   ├── company.md
 │   ├── api.md
@@ -30,7 +35,8 @@ modern-living-hub/
 ├── .github/
 │   └── workflows/
 │       └── pages.yml
-├── index.html
+├── index.html                  ← Homepage with Connect Pinterest button
+├── pinterest.html              ← Pinterest boards + pin creation page
 ├── about.html
 ├── contact.html
 ├── privacy-policy.html
@@ -48,12 +54,36 @@ modern-living-hub/
 └── .gitignore
 ```
 
-## GitHub Pages
+## Quick Start
 
-This site is deployed via GitHub Pages.
+### Frontend (GitHub Pages)
+
+The site is static HTML served by GitHub Pages. No build step required.
 
 - **Production URL:** [https://shehrozali6465372-ctrl.github.io/modern-living-hub](https://shehrozali6465372-ctrl.github.io/modern-living-hub)
-- **Repository:** [https://github.com/shehrozali6465372-ctrl/modern-living-hub](https://github.com/shehrozali6465372-ctrl/modern-living-hub)
+
+### Backend (Pinterest OAuth + API)
+
+The backend must be deployed separately and handles Pinterest OAuth and API calls.
+
+```bash
+cd server
+npm install
+cp .env.example .env
+# Edit .env with your Pinterest app credentials
+npm start
+```
+
+See `server/README.md` for full API documentation and deployment options.
+
+## Pinterest Integration Setup
+
+1. Create a Pinterest Developer App at https://developers.pinterest.com/apps/
+2. Enable Pinterest API v5
+3. Configure OAuth with the redirect URI matching `PINTEREST_REDIRECT_URI` from `.env`
+4. Request Standard Access with scopes: `boards:read`, `boards:write`, `pins:read`, `pins:write`
+5. Deploy the backend (see `server/README.md` for options)
+6. Set `BACKEND_URL` in the frontend if the frontend and backend are on different domains
 
 ## License
 

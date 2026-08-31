@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pinterest Integration — Modern Living Hub</title>
+    <meta name="description" content="Connect your Pinterest account to Modern Living Hub and manage boards and pins directly.">
+    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <!-- Navigation -->
+    <header class="site-header">
+        <nav class="navbar" role="navigation" aria-label="Main navigation">
+            <div class="container nav-container">
+                <a href="/" class="logo">
+                    <img src="assets/images/logo.png" alt="Modern Living Hub Logo" width="40" height="40">
+                    <span class="logo-text">Modern Living Hub</span>
+                </a>
+                <button class="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">
+                    <span class="hamburger"></span>
+                </button>
+                <ul class="nav-links">
+                    <li><a href="/">Home</a></li>
+                    <li><a href="about.html">About</a></li>
+                    <li><a href="contact.html">Contact</a></li>
+                    <li><a href="privacy-policy.html">Privacy</a></li>
+                    <li><a href="terms-of-service.html">Terms</a></li>
+                    <li><a href="pinterest.html" class="active">Pinterest</a></li>
+                </ul>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Page Hero -->
+    <section class="page-hero">
+        <div class="container">
+            <h1>Pinterest Integration</h1>
+            <p>Connect your Pinterest account and publish pins directly from Modern Living Hub.</p>
+        </div>
+    </section>
+
+    <main class="container" style="padding-top:2rem; padding-bottom:3rem;">
+        <!-- Connection Status -->
+        <div id="connection-panel">
+            <!-- Not connected state -->
+            <div id="disconnected-state" class="pinterest-card">
+                <h3>Connect Your Pinterest Account</h3>
+                <p>Link your Pinterest account to manage boards and create pins through the Pinterest API.</p>
+                <a href="/auth/pinterest" class="btn btn-pinterest">
+                    📌 Connect Pinterest
+                </a>
+                <p id="disconnect-error" style="color:var(--color-error); margin-top:1rem; display:none;"></p>
+            </div>
+
+            <!-- Connected state -->
+            <div id="connected-state" class="pinterest-card" style="display:none;">
+                <div class="pinterest-connected-banner">
+                    <span class="pinterest-connected">✅ Pinterest Connected</span>
+                    <button class="btn btn-disconnect" id="disconnect-pinterest-btn">Disconnect Pinterest</button>
+                </div>
+
+                <!-- Create Board -->
+                <div class="pinterest-card-section">
+                    <h3>Create Pinterest Board</h3>
+                    <form id="create-board-form" class="pinterest-form">
+                        <div class="form-group">
+                            <label for="board-name">Board Name</label>
+                            <input type="text" id="board-name" name="board_name" placeholder="e.g. Home Decor Ideas" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="board-description">Description (optional)</label>
+                            <input type="text" id="board-description" name="board_description" placeholder="Board description">
+                        </div>
+                        <button type="submit" class="btn btn-primary" id="create-board-btn">Create Board</button>
+                        <p id="board-result" style="margin-top:0.75rem;"></p>
+                    </form>
+                </div>
+
+                <!-- Select Board / Create Pin -->
+                <div class="pinterest-card-section">
+                    <h3>Create Pinterest Pin</h3>
+                    <form id="create-pin-form" class="pinterest-form">
+                        <div class="form-group">
+                            <label for="board-select">Select Pinterest Board</label>
+                            <select id="board-select" name="board_id" required>
+                                <option value="">Loading boards…</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="pin-image-url">Image URL</label>
+                            <input type="url" id="pin-image-url" name="image_url" placeholder="https://example.com/image.jpg" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="pin-title">Title</label>
+                            <input type="text" id="pin-title" name="title" placeholder="Pin title" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="pin-description">Description</label>
+                            <textarea id="pin-description" name="description" placeholder="Pin description" rows="4"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="pin-destination-url">Destination URL</label>
+                            <input type="url" id="pin-destination-url" name="destination_url" placeholder="https://your-site.com/article" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary" id="publish-pin-btn">Publish to Pinterest</button>
+                        <p id="pin-result" style="margin-top:0.75rem;"></p>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <h4>Modern Living Hub</h4>
+                    <p>Universal AI Content Operating System</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="privacy-policy.html">Privacy Policy</a></li>
+                        <li><a href="terms-of-service.html">Terms of Service</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                        <li><a href="security.html">Security</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>More</h4>
+                    <ul>
+                        <li><a href="cookies.html">Cookie Policy</a></li>
+                        <li><a href="disclaimer.html">Disclaimer</a></li>
+                        <li><a href="affiliate-disclosure.html">Affiliate Disclosure</a></li>
+                        <li><a href="sitemap.xml">Sitemap</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 Modern Living Hub. All rights reserved. | <a href="privacy-policy.html">Privacy</a> | <a href="terms-of-service.html">Terms</a></p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="assets/js/main.js" defer></script>
+    <script>
+      // Configure this to your backend URL if the frontend and backend are on different domains.
+      // If empty, the current origin is used (for same-origin deployments).
+      window.BACKEND_URL = '';
+    </script>
+    <script src="assets/js/pinterest.js" defer></script>
+</body>
+</html>

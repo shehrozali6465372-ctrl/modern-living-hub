@@ -39,6 +39,7 @@
                     <li><a href="contact.html">Contact</a></li>
                     <li><a href="privacy-policy.html">Privacy</a></li>
                     <li><a href="terms-of-service.html">Terms</a></li>
+                    <li><a href="pinterest.html">Pinterest</a></li>
                 </ul>
             </div>
         </nav>
@@ -54,6 +55,17 @@
                 <div class="hero-actions">
                     <a href="about.html" class="btn btn-primary">Learn More</a>
                     <a href="contact.html" class="btn btn-secondary">Get in Touch</a>
+                    <a href="/auth/pinterest" class="btn btn-pinterest" id="connect-pinterest-btn">
+                        📌 Connect Pinterest
+                    </a>
+                </div>
+
+                <!-- Pinterest connection status -->
+                <div id="pinterest-status" class="pinterest-status" style="display:none;">
+                    <div class="pinterest-status-inner">
+                        <span class="pinterest-connected">✅ Pinterest Connected</span>
+                        <button class="btn btn-disconnect" id="disconnect-pinterest-btn">Disconnect Pinterest</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -78,7 +90,7 @@
                 </div>
                 <div class="feature-card">
                     <h3>Pinterest API Ready</h3>
-                    <p>Pinterest API integration for automated pin scheduling, analytics, and audience growth — currently in development. Starting with Pinterest, expanding to all major platforms.</p>
+                    <p>Pinterest API integration for authenticated Pin publishing, board management, scheduling, and analytics. Starting with Pinterest, expanding to all major platforms.</p>
                 </div>
                 <div class="feature-card">
                     <h3>AI Publishing Platform</h3>
@@ -155,5 +167,11 @@
     </footer>
 
     <script src="assets/js/main.js" defer></script>
+    <script>
+      // Configure this to your backend URL if the frontend and backend are on different domains.
+      // If empty, the current origin is used (for same-origin deployments).
+      window.BACKEND_URL = '';
+    </script>
+    <script src="assets/js/pinterest.js" defer></script>
 </body>
 </html>

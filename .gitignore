@@ -30,3 +30,9 @@ npm-debug.log*
 # Misc
 *.bak
 *~
+
+# Backend
+server/node_modules/
+server/.env
+server/.env.local
+server/.env.*.local
