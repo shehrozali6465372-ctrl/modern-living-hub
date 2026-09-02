@@ -217,7 +217,6 @@ app.get("/auth/pinterest/callback", async (req, res) => {
     }
 
     const rawText = await tokenRes.text();
-    console.log("Token exchange response body:", rawText.slice(0, 500));
 
     let tokenData;
     try {
@@ -234,6 +233,14 @@ app.get("/auth/pinterest/callback", async (req, res) => {
     if (!tokenData.access_token) {
       return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=No access token returned by Pinterest.`);
     }
+
+    // Log safe diagnostics only — never access_token, refresh_token, or raw body.
+    console.log("Token exchange success:", JSON.stringify({
+      status: tokenRes.status,
+      token_received: Boolean(tokenData.access_token),
+      refresh_token_received: Boolean(tokenData.refresh_token),
+      scope: tokenData.scope || null
+    }));
 
     // Store the token server-side only
     req.session.pinterest = {
