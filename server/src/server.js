@@ -13,6 +13,7 @@
 import express from "express";
 import session from "express-session";
 import crypto from "node:crypto";
+import cookieParser from "cookie-parser";
 import "dotenv/config";
 
 const app = express();
@@ -52,6 +53,7 @@ const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write"].join("
 app.set("trust proxy", 1);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser(SESSION_SECRET));
 
 // ─── Session configuration ───
 // In production (GitHub Pages frontend on different origin):
@@ -147,6 +149,17 @@ app.get("/api/health", (req, res) => {
 app.get("/auth/pinterest", (req, res) => {
   const state = createState();
   req.session.oauth_state = state;
+  // Also store state in a signed cookie so it survives server restarts / in-memory session wipes.
+  // On Render free tier the service can hibernate between OAuth start and callback,
+  // clearing the in-memory session store. The cookie persists in the browser.
+  res.cookie("mlh.oauth_state", state, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    maxAge: 1000 * 60 * 10, // 10 minutes — enough for the OAuth flow
+    signed: true
+  });
+  console.log("OAuth start: state generated (length=" + state.length + "), session.id present=" + Boolean(req.session.id));
   req.session.save((err) => {
     if (err) {
       console.error("Session save error:", err.message);
@@ -159,6 +172,9 @@ app.get("/auth/pinterest", (req, res) => {
 // ─── Step 2: OAuth callback — GET /auth/pinterest/callback ───
 app.get("/auth/pinterest/callback", async (req, res) => {
   const { code, state, error, error_description } = req.query;
+  // Read the backup state from the signed cookie (survives server restarts).
+  const cookieState = req.signedCookies["mlh.oauth_state"] || null;
+  console.log("OAuth callback: session.id present=" + Boolean(req.session.id) + ", session_state present=" + Boolean(req.session.oauth_state) + ", cookie_state present=" + Boolean(cookieState) + ", callback_state present=" + Boolean(state));
 
   // Handle OAuth denial
   if (error) {
@@ -166,18 +182,27 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       error === "access_denied"
         ? "You denied the Pinterest authorization request."
         : error_description || "Pinterest authorization failed.";
+    res.clearCookie("mlh.oauth_state");
     return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(msg)}`);
   }
 
   if (!code || !state) {
+    res.clearCookie("mlh.oauth_state");
     return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Missing authorization code or state.`);
   }
 
-  // Validate state (CSRF protection)
-  if (!req.session.oauth_state || state !== req.session.oauth_state) {
+  // Validate state (CSRF protection) — check session first, then signed cookie backup.
+  const sessionState = req.session.oauth_state || null;
+  const stateValid = (sessionState && state === sessionState) || (cookieState && state === cookieState);
+
+  if (!stateValid) {
+    console.log("OAuth state validation FAILED: session_state present=" + Boolean(sessionState) + ", cookie_state present=" + Boolean(cookieState) + ", callback_state present=" + Boolean(state));
+    res.clearCookie("mlh.oauth_state");
     return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Invalid OAuth state. Please try again.`);
   }
+  console.log("OAuth state validation PASSED");
   delete req.session.oauth_state;
+  res.clearCookie("mlh.oauth_state");
 
   try {
     // Exchange authorization code for access token
