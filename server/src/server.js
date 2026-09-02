@@ -198,18 +198,27 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       auth_header_present: true
     }));
 
-    const tokenRes = await fetch(PINTEREST_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${credentials}`
-      },
-      body: body.toString()
-    });
+    let tokenRes;
+    try {
+      tokenRes = await fetch(PINTEREST_TOKEN_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${credentials}`
+        },
+        body: body.toString()
+      });
+      console.log("TOKEN FETCH COMPLETED");
+      console.log("Token exchange response status:", tokenRes.status);
+      console.log("Token exchange response content-type:", tokenRes.headers.get("content-type"));
+    } catch (fetchErr) {
+      console.error("TOKEN FETCH EXCEPTION:", fetchErr?.message || String(fetchErr));
+      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Network error during token exchange.")}`);
+    }
 
-    // Always read the response body for logging.
     const rawText = await tokenRes.text();
-    const contentType = tokenRes.headers.get("content-type") || "unknown";
+    console.log("Token exchange response body:", rawText.slice(0, 500));
+
     let tokenData;
     try {
       tokenData = JSON.parse(rawText);
@@ -218,10 +227,6 @@ app.get("/auth/pinterest/callback", async (req, res) => {
     }
 
     if (!tokenRes.ok) {
-      // Always log the response details — no secrets, no access tokens, no auth codes.
-      console.log("Token exchange response status:", tokenRes.status);
-      console.log("Token exchange response content-type:", contentType);
-      console.log("Token exchange response body:", rawText.slice(0, 500));
       const errDesc = tokenData.error_description || "HTTP " + tokenRes.status;
       return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token. Pinterest error: " + errDesc)}`);
     }
