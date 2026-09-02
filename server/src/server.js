@@ -207,8 +207,9 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       body: body.toString()
     });
 
-    // Read raw text first so we can log it on failure even if JSON parsing fails.
+    // Always read the response body for logging.
     const rawText = await tokenRes.text();
+    const contentType = tokenRes.headers.get("content-type") || "unknown";
     let tokenData;
     try {
       tokenData = JSON.parse(rawText);
@@ -217,15 +218,12 @@ app.get("/auth/pinterest/callback", async (req, res) => {
     }
 
     if (!tokenRes.ok) {
-      // Log only safe fields: HTTP status, Pinterest error code, and error description.
-      // Never log client_secret, access_token, authorization code, or raw request body.
-      const errCode = tokenData.error || null;
-      const errDesc = tokenData.error_description || null;
-      console.error("Token exchange failed:", tokenRes.status);
-      if (errCode) console.error("  Pinterest error:", errCode);
-      if (errDesc) console.error("  Pinterest error_description:", errDesc);
-      if (!errCode && !errDesc) console.error("  Response body (no error fields):", rawText.slice(0, 500));
-      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token. Pinterest error: " + (errDesc || errCode || "HTTP " + tokenRes.status))}`);
+      // Always log the response details — no secrets, no access tokens, no auth codes.
+      console.log("Token exchange response status:", tokenRes.status);
+      console.log("Token exchange response content-type:", contentType);
+      console.log("Token exchange response body:", rawText.slice(0, 500));
+      const errDesc = tokenData.error_description || "HTTP " + tokenRes.status;
+      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token. Pinterest error: " + errDesc)}`);
     }
 
     if (!tokenData.access_token) {
