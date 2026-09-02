@@ -198,11 +198,22 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       body: body.toString()
     });
 
-    const tokenData = await tokenRes.json().catch(() => ({}));
+    // Read raw text first so we can log it on failure even if JSON parsing fails.
+    const rawText = await tokenRes.text();
+    let tokenData;
+    try {
+      tokenData = JSON.parse(rawText);
+    } catch {
+      tokenData = {};
+    }
 
     if (!tokenRes.ok) {
       const errDetail = tokenData.error_description || tokenData.error || "unknown";
-      console.error("Token exchange failed:", tokenRes.status, errDetail);
+      console.error(
+        "Token exchange failed:",
+        tokenRes.status,
+        JSON.stringify({ error: tokenData.error, error_description: tokenData.error_description })
+      );
       return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token. Pinterest error: " + errDetail)}`);
     }
 
