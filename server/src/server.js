@@ -303,6 +303,47 @@ app.get("/api/pinterest/boards", async (req, res) => {
   }
 });
 
+// ─── Step 5b: Verify connection — GET /api/pinterest/account ───
+app.get("/api/pinterest/account", async (req, res) => {
+  const token = getUserToken(req);
+  if (!token) {
+    return res.status(401).json({ error: "Not connected to Pinterest." });
+  }
+
+  try {
+    const apiRes = await fetch(`${PINTEREST_API_BASE}/user_account`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (apiRes.status === 401 || apiRes.status === 403) {
+      return res.status(apiRes.status).json({
+        error: apiRes.status === 401
+          ? "Pinterest token is invalid or expired. Please reconnect."
+          : "Pinterest permission is missing. Verify app scopes."
+      });
+    }
+
+    if (!apiRes.ok) {
+      return handleApiError(apiRes.status, res);
+    }
+
+    const data = await apiRes.json();
+
+    // Return only safe, non-sensitive account fields.
+    res.json({
+      connected: true,
+      id: data.id || null,
+      username: data.username || null,
+      display_name: data.display_name || null,
+      profile_image: data.profile_image || null,
+      website_url: data.website_url || null
+    });
+  } catch (err) {
+    console.error("Account fetch error:", err.message);
+    res.status(502).json({ error: "Could not reach Pinterest API." });
+  }
+});
+
 // ─── Step 6: Create a Pin — POST /api/pinterest/pins ───
 app.post("/api/pinterest/pins", async (req, res) => {
   const token = getUserToken(req);
