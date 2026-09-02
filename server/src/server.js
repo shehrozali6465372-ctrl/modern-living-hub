@@ -181,18 +181,19 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 
   try {
     // Exchange authorization code for access token
+    // Pinterest requires HTTP Basic Authentication (not client_id/client_secret in body).
+    const credentials = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
     const body = new URLSearchParams({
       grant_type: "authorization_code",
       code: code.toString(),
-      redirect_uri: REDIRECT_URI,
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET
+      redirect_uri: REDIRECT_URI
     });
 
     const tokenRes = await fetch(PINTEREST_TOKEN_URL, {
       method: "POST",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${credentials}`
       },
       body: body.toString()
     });
@@ -200,8 +201,9 @@ app.get("/auth/pinterest/callback", async (req, res) => {
     const tokenData = await tokenRes.json().catch(() => ({}));
 
     if (!tokenRes.ok) {
-      console.error("Token exchange failed:", tokenRes.status);
-      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token.")}`);
+      const errDetail = tokenData.error_description || tokenData.error || "unknown";
+      console.error("Token exchange failed:", tokenRes.status, errDetail);
+      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token. Pinterest error: " + errDetail)}`);
     }
 
     if (!tokenData.access_token) {
