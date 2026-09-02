@@ -7,7 +7,7 @@
  *   PINTEREST_CLIENT_SECRET — Pinterest app client secret (server-side only)
  *   PINTEREST_REDIRECT_URI  — Exact callback URL registered with Pinterest
  *   SESSION_SECRET          — Secret for express-session
- *   FRONTEND_URL            — The deployed frontend origin (e.g. https://shehrozali6465372-ctrl.github.io)
+ *   FRONTEND_URL            — Full deployed frontend base URL including project path (e.g. https://shehrozali6465372-ctrl.github.io/modern-living-hub)
  */
 
 import express from "express";
@@ -24,6 +24,7 @@ const CLIENT_SECRET = process.env.PINTEREST_CLIENT_SECRET;
 const REDIRECT_URI = process.env.PINTEREST_REDIRECT_URI;
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const FRONTEND_URL = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+const CORS_ORIGIN = new URL(FRONTEND_URL).origin;
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -78,7 +79,7 @@ app.use(
 // Production: https://shehrozali6465372-ctrl.github.io
 // Development: localhost origins
 const allowedOrigins = [
-  FRONTEND_URL,
+  CORS_ORIGIN,
   "http://localhost:5500",
   "http://127.0.0.1:5500",
   "http://localhost:8000",
@@ -401,5 +402,6 @@ app.listen(PORT, () => {
   console.log(`Modern Living Hub backend running on http://localhost:${PORT}`);
   console.log(`Pinterest OAuth redirect URI: ${REDIRECT_URI}`);
   console.log(`Frontend URL: ${FRONTEND_URL}`);
+  console.log(`CORS origin:   ${CORS_ORIGIN}`);
   console.log(`Production mode: ${isProduction}`);
 });

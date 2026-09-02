@@ -37,9 +37,23 @@ npm start
 | `PINTEREST_CLIENT_SECRET` | Yes      | Pinterest app client secret (server-side only, never in frontend) |
 | `PINTEREST_REDIRECT_URI`  | Yes      | Exact callback URL registered in Pinterest app settings  |
 | `SESSION_SECRET`          | Yes      | Random string for session encryption                     |
-| `FRONTEND_URL`            | Yes      | Frontend origin (e.g. `https://shehrozali6465372-ctrl.github.io`). Used for OAuth redirect destination after login, and CORS allowlist. |
+| `FRONTEND_URL`            | Yes      | Full deployed frontend base URL including project path. e.g. `https://shehrozali6465372-ctrl.github.io/modern-living-hub`. CORS origin is derived from this automatically. |
 | `PORT`                    | No       | Server port, defaults to 3001                            |
 | `NODE_ENV`                | No       | Set to `production` for secure HTTPS cookies + SameSite=None |
+
+## How FRONTEND_URL Works
+
+`FRONTEND_URL` is the **full deployed frontend base URL**, including the project path.
+
+- **OAuth redirects** use `FRONTEND_URL` directly:
+  `https://shehrozali6465372-ctrl.github.io/modern-living-hub/pinterest.html`
+
+- **CORS** is derived from `new URL(FRONTEND_URL).origin`, so it allows:
+  `https://shehrozali6465372-ctrl.github.io`
+  (just the origin, without the project path)
+
+This means the frontend can be served under a project subpath (like `/modern-living-hub`)
+while CORS correctly allows requests from the GitHub Pages origin.
 
 ## Required Pinterest Scopes
 
@@ -64,11 +78,11 @@ The app requests these scopes only:
 
 ## Cross-Origin Session Handling
 
-The frontend is hosted on GitHub Pages (`https://shehrozali6465372-ctrl.github.io`)
+The frontend is hosted on GitHub Pages (`https://shehrozali6465372-ctrl.github.io/modern-living-hub`)
 and the backend runs on a separate domain. This requires:
 
-- **CORS** must allow the frontend origin with credentials.
-- **Session cookies** must use `SameSite=None` + `Secure=true` in production so
+- **CORS** allows only the derived origin from `FRONTEND_URL` (no wildcards, credentials enabled).
+- **Session cookies** use `SameSite=None` + `Secure=true` in production so
   the browser sends the session cookie on cross-origin API requests from the frontend.
 
 In production (`NODE_ENV=production`):
@@ -101,7 +115,7 @@ In development (`NODE_ENV=development`):
    ```
 4. Request Standard Access with scopes: `boards:read`, `boards:write`, `pins:read`, `pins:write`
 
-### Option 1: Deploy to Render (recommended)
+### Deploying to Render (recommended)
 
 1. Create an account at https://render.com
 2. Create a new Web Service pointing to this repo
@@ -110,13 +124,13 @@ In development (`NODE_ENV=development`):
 5. Add all environment variables in the Render dashboard:
    - `PINTEREST_CLIENT_ID`
    - `PINTEREST_CLIENT_SECRET`
-   - `PINTEREST_REDIRECT_URI` = `https://your-service.onrender.com/auth/pinterest/callback`
+   - `PINTEREST_REDIRECT_URI` = `https://modern-living-hub.onrender.com/auth/pinterest/callback`
    - `SESSION_SECRET` = (generate a random string)
-   - `FRONTEND_URL` = `https://shehrozali6465372-ctrl.github.io`
+   - `FRONTEND_URL` = `https://shehrozali6465372-ctrl.github.io/modern-living-hub`
    - `NODE_ENV` = `production`
-6. Register `https://your-service.onrender.com/auth/pinterest/callback` in Pinterest
+6. Register `https://modern-living-hub.onrender.com/auth/pinterest/callback` in Pinterest
 
-### Option 2: Deploy to Railway
+### Deploying to Railway
 
 1. Create an account at https://railway.app
 2. Create a new project and deploy this repo
@@ -124,12 +138,12 @@ In development (`NODE_ENV=development`):
 4. Add all environment variables
 5. Register `https://your-app.up.railway.app/auth/pinterest/callback` in Pinterest
 
-### Option 3: Deploy to a VPS / custom server
+### Deploying to a VPS / custom server
 
 ```bash
 cd server
 npm install --production
-NODE_ENV=production FRONTEND_URL=https://shehrozali6465372-ctrl.github.io node src/server.js
+NODE_ENV=production FRONTEND_URL=https://shehrozali6465372-ctrl.github.io/modern-living-hub node src/server.js
 ```
 
 Use Nginx reverse proxy with HTTPS enabled (e.g. via Let's Encrypt).
@@ -141,7 +155,7 @@ set in each HTML page's inline script:
 
 ```html
 <script>
-  window.BACKEND_URL = 'https://your-backend-domain.com';
+  window.BACKEND_URL = 'https://modern-living-hub.onrender.com';
 </script>
 ```
 

@@ -89,7 +89,7 @@ See `server/README.md` for full API documentation and deployment options.
    - `PINTEREST_CLIENT_SECRET`
    - `PINTEREST_REDIRECT_URI` (must match Pinterest app registration exactly)
    - `SESSION_SECRET`
-   - `FRONTEND_URL` (e.g. `https://shehrozali6465372-ctrl.github.io`)
+   - `FRONTEND_URL` (e.g. `https://shehrozali6465372-ctrl.github.io/modern-living-hub`)
 7. Set `window.BACKEND_URL` in `index.html` and `pinterest.html` to the deployed backend domain.
    The frontend shows a clear configuration error if this is not set.
 
@@ -101,14 +101,14 @@ See `server/README.md` for full API documentation and deployment options.
 | `PINTEREST_CLIENT_SECRET` | Yes      | Pinterest app secret (server-side only)            |
 | `PINTEREST_REDIRECT_URI`  | Yes      | Exact callback URL registered in Pinterest app     |
 | `SESSION_SECRET`          | Yes      | Random string for session encryption               |
-| `FRONTEND_URL`            | Yes      | Frontend origin for OAuth redirect + CORS allowlist|
+| `FRONTEND_URL`            | Yes      | Full frontend base URL with project path. CORS is derived from origin.|
 | `NODE_ENV`                | No       | Set `production` for secure HTTPS cookies          |
 
 ## Cross-Origin Deployment Notes
 
 - **Frontend:** GitHub Pages (`https://shehrozali6465372-ctrl.github.io`)
 - **Backend:** Separate Node.js server on its own HTTPS domain
-- Backend CORS allows only the configured `FRONTEND_URL` (no wildcards).
+- Backend CORS allows only the origin derived from `FRONTEND_URL` (no wildcards).
 - Production sessions use `SameSite=None` + `Secure=true` so cross-origin
   requests from the GitHub Pages frontend can be authenticated.
 
