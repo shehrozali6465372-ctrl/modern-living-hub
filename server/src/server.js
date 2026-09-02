@@ -189,6 +189,15 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       redirect_uri: REDIRECT_URI
     });
 
+    // Diagnostic: confirm the token exchange parameters (no secrets logged)
+    console.log("Token exchange request:", JSON.stringify({
+      url: PINTEREST_TOKEN_URL,
+      grant_type: "authorization_code",
+      code_length: code.toString().length,
+      redirect_uri: REDIRECT_URI,
+      auth_header_present: true
+    }));
+
     const tokenRes = await fetch(PINTEREST_TOKEN_URL, {
       method: "POST",
       headers: {
@@ -208,13 +217,15 @@ app.get("/auth/pinterest/callback", async (req, res) => {
     }
 
     if (!tokenRes.ok) {
-      const errDetail = tokenData.error_description || tokenData.error || "unknown";
-      console.error(
-        "Token exchange failed:",
-        tokenRes.status,
-        JSON.stringify({ error: tokenData.error, error_description: tokenData.error_description })
-      );
-      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token. Pinterest error: " + errDetail)}`);
+      // Log only safe fields: HTTP status, Pinterest error code, and error description.
+      // Never log client_secret, access_token, authorization code, or raw request body.
+      const errCode = tokenData.error || null;
+      const errDesc = tokenData.error_description || null;
+      console.error("Token exchange failed:", tokenRes.status);
+      if (errCode) console.error("  Pinterest error:", errCode);
+      if (errDesc) console.error("  Pinterest error_description:", errDesc);
+      if (!errCode && !errDesc) console.error("  Response body (no error fields):", rawText.slice(0, 500));
+      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token. Pinterest error: " + (errDesc || errCode || "HTTP " + tokenRes.status))}`);
     }
 
     if (!tokenData.access_token) {
