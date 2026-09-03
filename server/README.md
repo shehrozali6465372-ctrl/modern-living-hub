@@ -69,40 +69,50 @@ The app requests these scopes only:
 |--------|-------------------------------|------------------------------------------|
 | GET    | `/api/health`                 | Health check (safe config diagnostics)   |
 | GET    | `/auth/pinterest`             | Start OAuth flow (redirects to Pinterest)|
-| GET    | `/auth/pinterest/callback`    | OAuth callback (Pinterest redirects here)|
-| GET    | `/api/pinterest/status`       | Check connection status                  |
-| POST   | `/api/pinterest/disconnect`   | Clear stored session/token               |
+| GET    | `/auth/pinterest/callback`    | OAuth callback (creates handoff code)    |
+| POST   | `/api/pinterest/complete`     | Complete OAuth handoff → session token   |
+| GET    | `/api/pinterest/status`       | Check connection status (Bearer or cookie)|
+| POST   | `/api/pinterest/disconnect`   | Clear session token and Pinterest tokens |
 | GET    | `/api/pinterest/boards`       | List authenticated user's boards         |
 | POST   | `/api/pinterest/boards`       | Create a new board                       |
 | POST   | `/api/pinterest/pins`         | Create a new pin                         |
 
-## Cross-Origin Session Handling
+## Cross-Origin Authentication
 
 The frontend is hosted on GitHub Pages (`https://shehrozali6465372-ctrl.github.io/modern-living-hub`)
-and the backend runs on a separate domain. This requires:
+and the backend runs on a separate domain. Cross-site cookies are unreliable, so the app uses
+a **one-time handoff code + bearer session token** architecture:
 
-- **CORS** allows only the derived origin from `FRONTEND_URL` (no wildcards, credentials enabled).
-- **Session cookies** use `SameSite=None` + `Secure=true` in production so
-  the browser sends the session cookie on cross-origin API requests from the frontend.
+### OAuth Handoff Flow
 
-In production (`NODE_ENV=production`):
-- `SameSite=None` — cookie sent on all cross-origin requests
-- `Secure=true` — cookie only sent over HTTPS (required by browsers for SameSite=None)
+1. User clicks "Connect Pinterest" → backend redirects to Pinterest OAuth
+2. Pinterest redirects back to backend `/auth/pinterest/callback`
+3. Backend exchanges code for access token, stores tokens server-side
+4. Backend generates a **one-time random handoff code** (single-use, 5-minute TTL)
+5. Backend redirects to `FRONTEND_URL/pinterest.html?pinterest_connected=1&handoff=<CODE>`
+6. Frontend POSTs the handoff code to `POST /api/pinterest/complete`
+7. Backend validates the code, creates a **bearer session token** (24-hour TTL)
+8. Frontend stores the bearer token and sends it as `Authorization: Bearer <token>`
+9. All subsequent API calls use the bearer token — **no cross-site cookies needed**
 
-In development (`NODE_ENV=development`):
-- `SameSite=lax` — sufficient for localhost
-- `Secure=false` — allows HTTP
+### Session Tokens
+
+- Opaque, random, 64-character hex strings
+- Server-side only (never exposed to third parties)
+- 24-hour TTL with automatic expiry
+- Single-use handoff codes (5-minute TTL)
+- Bearer tokens invalidated on disconnect
 
 ## Security
 
 - `PINTEREST_CLIENT_SECRET` is never sent to the frontend.
-- Access tokens are stored server-side in an ephemeral tokenStore (in-memory Map), NOT in the session cookie.
-- After successful OAuth, tokens are ALSO stored in a signed, HttpOnly cookie (`mlh.ptoken`) as a fallback.
-- The signed token cookie survives Render Free tier hibernation and cross-origin cookie issues.
-- The cookie is NOT client-readable (HttpOnly), NOT tamperable (signed with HMAC-SHA256), and ONLY sent over HTTPS (Secure).
-- The session cookie (`mlh.sid`) only contains an opaque sessionId and oauth_state.
-- Pinterest access_token and refresh_token are never exposed to the frontend JavaScript.
-- On Render Free tier, the tokenStore may be lost on hibernation, but the signed cookie provides a reliable fallback.
+- Access tokens are stored server-side in an ephemeral tokenStore (in-memory Map).
+- OAuth uses a **one-time handoff code** — tokens never appear in URLs or frontend responses.
+- Bearer session tokens are opaque random hex strings, never Pinterest tokens.
+- Pinterest access_token and refresh_token are NEVER exposed to the frontend JavaScript.
+- Handoff codes are single-use with 5-minute TTL.
+- Bearer session tokens have 24-hour TTL and are invalidated on disconnect.
+- CORS allows `Authorization` header for cross-site bearer auth.
 - OAuth `state` parameter is validated on callback (CSRF protection).
 - All environment variables are loaded from `.env` (ignored by git).
 - HTTPS is required in production.

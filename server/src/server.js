@@ -95,7 +95,7 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   }
 
   if (req.method === "OPTIONS") {
@@ -131,35 +131,97 @@ function deleteTokens(sessionId) {
   tokenStore.delete(sessionId);
 }
 
-// ─── Persistent token cookie (survives Render hibernation) ───
-// After successful OAuth, the access token is also stored in a signed, HttpOnly cookie.
-// This cookie is NOT client-readable (HttpOnly), NOT tamperable (signed), and
-// ONLY sent over HTTPS (Secure). It serves as a fallback when the in-memory
-// tokenStore is lost due to process hibernation on Render Free tier.
-const TOKEN_COOKIE_NAME = "mlh.ptoken";
-const TOKEN_COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: isProduction,
-  sameSite: isProduction ? "none" : "lax",
-  maxAge: 1000 * 60 * 60, // 1 hour — matches tokenStore TTL
-  signed: true
-};
+// ─── One-time handoff store (survives the cross-site redirect gap) ───
+// After OAuth callback, a random handoff code is generated and sent to GitHub Pages
+// in the redirect URL. The frontend POSTs it to /api/pinterest/complete to receive
+// a session bearer token. This eliminates the need for cross-site cookies.
+const handoffStore = new Map();
+const HANDOFF_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function createHandoff(sessionId) {
+  const code = crypto.randomBytes(32).toString("hex");
+  handoffStore.set(code, {
+    sessionId,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + HANDOFF_TTL_MS
+  });
+  return code;
+}
+
+function consumeHandoff(code) {
+  const entry = handoffStore.get(code);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    handoffStore.delete(code);
+    return null;
+  }
+  handoffStore.delete(code); // single-use: delete immediately
+  return entry;
+}
+
+// ─── Session bearer token store ───
+// After the frontend completes the handoff, it receives a short-lived opaque
+// bearer token. This token maps to a sessionId whose Pinterest tokens live
+// in the in-memory tokenStore. The frontend sends it as Authorization: Bearer.
+const sessionTokenStore = new Map();
+const SESSION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function createSessionToken(sessionId) {
+  const token = crypto.randomBytes(32).toString("hex");
+  sessionTokenStore.set(token, {
+    sessionId,
+    expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
+  });
+  return token;
+}
+
+function resolveSessionToken(token) {
+  const entry = sessionTokenStore.get(token);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    sessionTokenStore.delete(token);
+    return null;
+  }
+  return entry.sessionId;
+}
+
+function deleteSessionToken(token) {
+  const entry = sessionTokenStore.get(token);
+  sessionTokenStore.delete(token);
+  return entry ? entry.sessionId : null;
+}
 
 // ─── Auth helpers ───
 
-/** Get the authenticated user's saved Pinterest token (server-side). */
+/** Resolve the authenticated user's Pinterest access token from the request. */
 function getUserToken(req) {
-  // Primary: check in-memory tokenStore
-  const pinterest = getTokens(req.session.sessionId);
-  if (pinterest && pinterest.access_token) {
-    return pinterest.access_token;
+  // 1. Check Authorization header (primary — cross-site safe)
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const bearerToken = authHeader.slice(7);
+    const sessionId = resolveSessionToken(bearerToken);
+    if (sessionId) {
+      const pinterest = getTokens(sessionId);
+      if (pinterest && pinterest.access_token) return pinterest.access_token;
+    }
   }
-  // Fallback: check signed token cookie (survives Render hibernation)
-  const tokenCookie = req.signedCookies[TOKEN_COOKIE_NAME];
-  if (tokenCookie && tokenCookie.access_token) {
-    return tokenCookie.access_token;
-  }
+  // 2. Fallback: cookie-based session (same-origin only)
+  const pinterest = getTokens(req.session?.sessionId);
+  if (pinterest && pinterest.access_token) return pinterest.access_token;
   return null;
+}
+
+/** Resolve sessionId from request (for status, disconnect, etc.) */
+function getSessionId(req) {
+  // 1. Check Authorization header
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const bearerToken = authHeader.slice(7);
+    const sessionId = resolveSessionToken(bearerToken);
+    if (sessionId) return sessionId;
+  }
+  // 2. Fallback: cookie-based session
+  return req.session?.sessionId || null;
 }
 
 /** Create a secure random state value for OAuth CSRF protection. */
@@ -312,7 +374,7 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       scope: tokenData.scope || null
     }));
 
-    // Store the token server-side only — NEVER in the session cookie.
+    // Store the token server-side ONLY — never in cookies or URLs.
     const connectedAt = new Date().toISOString();
     const pinterestData = {
       access_token: tokenData.access_token,
@@ -321,17 +383,15 @@ app.get("/auth/pinterest/callback", async (req, res) => {
     };
     storeTokens(req.session.sessionId, pinterestData);
 
-    // Also store in a signed, HttpOnly cookie as a fallback for cross-origin
-    // requests and Render Free tier hibernation. The cookie is NOT client-readable.
-    res.cookie(TOKEN_COOKIE_NAME, {
-      access_token: tokenData.access_token,
-      connected_at: connectedAt
-    }, TOKEN_COOKIE_OPTIONS);
+    // Generate a one-time handoff code for cross-site OAuth completion.
+    // The frontend will POST this code to /api/pinterest/complete to receive
+    // a bearer session token — no cross-site cookies needed.
+    const handoffCode = createHandoff(req.session.sessionId);
 
-    // Clear the oauth_state from the cookie (no longer needed).
+    // Clear the oauth_state (no longer needed).
     delete req.session.oauth_state;
-    console.log("Callback complete: token stored in tokenStore and cookie. Redirecting to frontend.");
-    res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1`);
+    console.log("Callback complete: tokens stored, handoff created. Redirecting to frontend.");
+    res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1&handoff=${handoffCode}`);
   } catch (err) {
     console.error("OAuth callback error:", err.message);
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Network error during Pinterest authentication.")}`);
@@ -339,32 +399,13 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 });
 
 // ─── Step 3: OAuth status — GET /api/pinterest/status ───
+// Accepts: Authorization: Bearer <session_token> (cross-site) OR cookie (same-origin)
 app.get("/api/pinterest/status", (req, res) => {
-  const sessionPresent = Boolean(req.session && req.session.sessionId);
-  const sessionId = req.session?.sessionId || null;
-
-  // Primary: check in-memory tokenStore
-  let pinterest = sessionId ? getTokens(sessionId) : null;
-  let source = "tokenStore";
-
-  // Fallback: check signed token cookie
-  if (!pinterest || !pinterest.access_token) {
-    const tokenCookie = req.signedCookies[TOKEN_COOKIE_NAME];
-    if (tokenCookie && tokenCookie.access_token) {
-      pinterest = tokenCookie;
-      source = "cookie";
-      // Re-populate tokenStore from cookie (recover from hibernation)
-      if (sessionId) {
-        storeTokens(sessionId, pinterest);
-        console.log("Status: recovered tokens from cookie to tokenStore");
-      }
-    }
-  }
+  const sessionId = getSessionId(req);
+  const pinterest = sessionId ? getTokens(sessionId) : null;
 
   console.log("Status check:", JSON.stringify({
-    session_present: sessionPresent,
-    tokenStore_hit: source === "tokenStore" && Boolean(pinterest?.access_token),
-    cookie_hit: source === "cookie" && Boolean(pinterest?.access_token),
+    auth_method: req.headers.authorization ? "bearer" : "cookie",
     connected: Boolean(pinterest?.access_token)
   }));
 
@@ -374,13 +415,45 @@ app.get("/api/pinterest/status", (req, res) => {
   res.json({ connected: true, connected_at: pinterest.connected_at });
 });
 
+// ─── Step 3b: Complete OAuth handoff — POST /api/pinterest/complete ───
+// The frontend POSTs the one-time handoff code after the OAuth redirect.
+// On success, returns a bearer session token for subsequent API calls.
+app.post("/api/pinterest/complete", (req, res) => {
+  const { handoff } = req.body;
+  if (!handoff || typeof handoff !== "string") {
+    return res.status(400).json({ error: "Missing handoff code." });
+  }
+
+  const entry = consumeHandoff(handoff);
+  if (!entry) {
+    return res.status(400).json({ error: "Invalid or expired handoff code." });
+  }
+
+  // Verify the Pinterest tokens still exist for this session
+  const pinterest = getTokens(entry.sessionId);
+  if (!pinterest || !pinterest.access_token) {
+    return res.status(400).json({ error: "Pinterest tokens not found. Please reconnect." });
+  }
+
+  // Create an opaque bearer session token for cross-site API calls
+  const sessionToken = createSessionToken(entry.sessionId);
+
+  console.log("Handoff complete: session token created");
+  res.json({ connected: true, session_token: sessionToken });
+});
+
 // ─── Step 4: Disconnect — POST /api/pinterest/disconnect ───
 app.post("/api/pinterest/disconnect", (req, res) => {
-  deleteTokens(req.session.sessionId);
-  delete req.session.sessionId;
-  delete req.session.oauth_state;
-  // Also clear the persistent token cookie
-  res.clearCookie(TOKEN_COOKIE_NAME, { signed: true });
+  const sessionId = getSessionId(req);
+  if (sessionId) {
+    deleteTokens(sessionId);
+    // Also invalidate any session tokens for this session
+    for (const [token, entry] of sessionTokenStore.entries()) {
+      if (entry.sessionId === sessionId) sessionTokenStore.delete(token);
+    }
+  }
+  delete req.session?.sessionId;
+  delete req.session?.oauth_state;
   res.json({ disconnected: true });
 });
 

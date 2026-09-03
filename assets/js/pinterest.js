@@ -1,19 +1,25 @@
 /**
  * Modern Living Hub — Pinterest Integration Frontend
- * Handles OAuth status, board listing, pin creation, and board creation
- * via the server-side backend API.
+ * Handles OAuth handoff, session token, board listing, pin creation,
+ * and board creation via the server-side backend API.
+ *
+ * Cross-site architecture:
+ *   1. Backend redirects to this page with ?pinterest_connected=1&handoff=<CODE>
+ *   2. Frontend POSTs handoff code to /api/pinterest/complete
+ *   3. Backend returns a bearer session_token
+ *   4. All subsequent API calls use Authorization: Bearer <session_token>
  *
  * The backend URL is configured in each page via:
  *   window.BACKEND_URL = 'https://your-backend-domain.com';
- * All Pinterest API calls (OAuth, status, boards, pins, disconnect)
- * use this single value.
  */
 
 (function () {
     'use strict';
 
     // ─── Configuration ───
-    const BACKEND = (window.BACKEND_URL || '').replace(/\/+$/, ''); // strip trailing slashes
+    var BACKEND = (window.BACKEND_URL || '').replace(/\/+$/, '');
+    var SESSION_TOKEN_KEY = 'mlh_session_token';
+    var sessionToken = localStorage.getItem(SESSION_TOKEN_KEY) || null;
 
     // ─── Backend availability helpers ───
     function isBackendConfigured() {
@@ -27,25 +33,34 @@
         }
     }
 
+    // ─── Auth headers helper ───
+    function authHeaders(extra) {
+        var headers = Object.assign({}, extra || {});
+        if (sessionToken) {
+            headers['Authorization'] = 'Bearer ' + sessionToken;
+        }
+        return headers;
+    }
+
     // ─── DOM references ───
-    const connectBtn = document.getElementById('connect-pinterest-btn');
-    const statusBanner = document.getElementById('pinterest-status');
-    const homeDisconnectBtn = document.getElementById('disconnect-pinterest-btn');
+    var connectBtn = document.getElementById('connect-pinterest-btn');
+    var statusBanner = document.getElementById('pinterest-status');
+    var homeDisconnectBtn = document.getElementById('disconnect-pinterest-btn');
 
-    const connectedState = document.getElementById('connected-state');
-    const disconnectedState = document.getElementById('disconnected-state');
+    var connectedState = document.getElementById('connected-state');
+    var disconnectedState = document.getElementById('disconnected-state');
 
-    const boardSelect = document.getElementById('board-select');
-    const createBoardForm = document.getElementById('create-board-form');
-    const createPinForm = document.getElementById('create-pin-form');
+    var boardSelect = document.getElementById('board-select');
+    var createBoardForm = document.getElementById('create-board-form');
+    var createPinForm = document.getElementById('create-pin-form');
 
-    const boardResult = document.getElementById('board-result');
-    const pinResult = document.getElementById('pin-result');
-    const disconnectError = document.getElementById('disconnect-error');
+    var boardResult = document.getElementById('board-result');
+    var pinResult = document.getElementById('pin-result');
+    var disconnectError = document.getElementById('disconnect-error');
 
     // ─── Update Connect Pinterest links to point to backend OAuth ───
     function updateConnectLinks() {
-        const authUrl = isBackendConfigured() ? BACKEND + '/auth/pinterest' : '#';
+        var authUrl = isBackendConfigured() ? BACKEND + '/auth/pinterest' : '#';
         document.querySelectorAll('a.btn-pinterest').forEach(function (link) {
             if (link.id !== 'disconnect-pinterest-btn') {
                 link.href = authUrl;
@@ -60,17 +75,54 @@
         }
     }
 
+    // ─── Complete OAuth handoff (one-time code → bearer session token) ───
+    async function completeHandoff(code) {
+        try {
+            var res = await fetch(BACKEND + '/api/pinterest/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ handoff: code })
+            });
+            var data = await res.json();
+            if (data.connected && data.session_token) {
+                sessionToken = data.session_token;
+                localStorage.setItem(SESSION_TOKEN_KEY, sessionToken);
+                showConnectedUI();
+                return true;
+            } else {
+                showError(disconnectError, data.error || 'Could not complete Pinterest connection.');
+                showDisconnectedUI();
+                return false;
+            }
+        } catch (e) {
+            showError(disconnectError, 'Could not reach the server to complete connection.');
+            showDisconnectedUI();
+            return false;
+        }
+    }
+
     // ─── Handle OAuth return params ───
-    function handleUrlParams() {
-        const params = new URLSearchParams(window.location.search);
+    async function handleUrlParams() {
+        var params = new URLSearchParams(window.location.search);
+        var handoff = params.get('handoff');
+        var error = params.get('pinterest_error');
+
+        if (params.get('pinterest_connected') === '1' && handoff) {
+            // Clean URL immediately
+            window.history.replaceState({}, '', window.location.pathname);
+            // Complete the one-time handoff → get bearer session token
+            await completeHandoff(handoff);
+            return;
+        }
+
         if (params.get('pinterest_connected') === '1') {
             window.history.replaceState({}, '', window.location.pathname);
-            showConnectedUI();
+            // Legacy: no handoff code, try existing session token
         }
-        if (params.get('pinterest_error')) {
-            const msg = params.get('pinterest_error');
+
+        if (error) {
             window.history.replaceState({}, '', window.location.pathname);
-            showError(disconnectError, msg);
+            showError(disconnectError, decodeURIComponent(error));
         }
     }
 
@@ -82,13 +134,19 @@
             return;
         }
         try {
-            const res = await fetch(`${BACKEND}/api/pinterest/status`, {
-                credentials: 'include'
+            var res = await fetch(BACKEND + '/api/pinterest/status', {
+                credentials: 'include',
+                headers: authHeaders()
             });
-            const data = await res.json();
+            var data = await res.json();
             if (data.connected) {
                 showConnectedUI();
             } else {
+                // Session token expired or invalid — clear it
+                if (sessionToken) {
+                    sessionToken = null;
+                    localStorage.removeItem(SESSION_TOKEN_KEY);
+                }
                 showDisconnectedUI();
             }
         } catch {
@@ -128,51 +186,29 @@
             boardSelect.innerHTML = '<option value="">Backend not configured</option>';
             return;
         }
-        boardSelect.innerHTML = '<option value="">Loading boards…</option>';
         try {
-            const res = await fetch(`${BACKEND}/api/pinterest/boards`, {
-                credentials: 'include'
+            var res = await fetch(BACKEND + '/api/pinterest/boards', {
+                credentials: 'include',
+                headers: authHeaders()
             });
-            const data = await res.json();
-            if (!res.ok) {
-                boardSelect.innerHTML = `<option value="">Error: ${escapeHtml(data.error)}</option>`;
+            if (res.status === 401) {
+                boardSelect.innerHTML = '<option value="">Not connected — reconnect</option>';
                 return;
             }
-            if (data.boards.length === 0) {
-                boardSelect.innerHTML = '<option value="">No boards found. Create one above.</option>';
+            var data = await res.json();
+            if (!data.boards || !data.boards.length) {
+                boardSelect.innerHTML = '<option value="">No boards found — create one below</option>';
                 return;
             }
-            boardSelect.innerHTML = '<option value="">Select a board…</option>';
+            boardSelect.innerHTML = '<option value="">Select a board</option>';
             data.boards.forEach(function (board) {
-                const opt = document.createElement('option');
+                var opt = document.createElement('option');
                 opt.value = board.id;
-                opt.textContent = board.name;
+                opt.textContent = board.name + (board.description ? ' — ' + board.description : '');
                 boardSelect.appendChild(opt);
             });
         } catch {
-            boardSelect.innerHTML = '<option value="">Could not load boards — is the backend running?</option>';
-        }
-    }
-
-    // ─── Disconnect Pinterest ───
-    async function disconnectPinterest() {
-        if (!isBackendConfigured()) {
-            showError(disconnectError, 'Backend not configured.');
-            return;
-        }
-        try {
-            const res = await fetch(`${BACKEND}/api/pinterest/disconnect`, {
-                method: 'POST',
-                credentials: 'include'
-            });
-            const data = await res.json();
-            if (data.disconnected) {
-                showDisconnectedUI();
-            } else {
-                showError(disconnectError, 'Disconnect failed. Please try again.');
-            }
-        } catch {
-            showError(disconnectError, 'Could not reach the server. Please try again.');
+            boardSelect.innerHTML = '<option value="">Could not load boards</option>';
         }
     }
 
@@ -187,21 +223,21 @@
                 }
                 return;
             }
-            const name = document.getElementById('board-name').value.trim();
-            const description = document.getElementById('board-description').value.trim();
+            var name = document.getElementById('board-name').value.trim();
+            var description = document.getElementById('board-description').value.trim();
             if (!name) return;
 
             boardResult.textContent = 'Creating board…';
             boardResult.style.color = 'var(--color-text-light)';
 
             try {
-                const res = await fetch(`${BACKEND}/api/pinterest/boards`, {
+                var res = await fetch(BACKEND + '/api/pinterest/boards', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: authHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'include',
                     body: JSON.stringify({ name: name, description: description })
                 });
-                const data = await res.json();
+                var data = await res.json();
                 if (!res.ok) {
                     boardResult.textContent = '❌ ' + (data.error || 'Failed to create board.');
                     boardResult.style.color = 'var(--color-error)';
@@ -229,11 +265,11 @@
                 }
                 return;
             }
-            const boardId = boardSelect ? boardSelect.value : '';
-            const imageUrl = document.getElementById('pin-image-url').value.trim();
-            const title = document.getElementById('pin-title').value.trim();
-            const description = document.getElementById('pin-description').value.trim();
-            const destinationUrl = document.getElementById('pin-destination-url').value.trim();
+            var boardId = boardSelect ? boardSelect.value : '';
+            var imageUrl = document.getElementById('pin-image-url').value.trim();
+            var title = document.getElementById('pin-title').value.trim();
+            var description = document.getElementById('pin-description').value.trim();
+            var destinationUrl = document.getElementById('pin-destination-url').value.trim();
 
             if (!boardId) {
                 pinResult.textContent = '❌ Please select a board.';
@@ -250,9 +286,9 @@
             pinResult.style.color = 'var(--color-text-light)';
 
             try {
-                const res = await fetch(`${BACKEND}/api/pinterest/pins`, {
+                var res = await fetch(BACKEND + '/api/pinterest/pins', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: authHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'include',
                     body: JSON.stringify({
                         board_id: boardId,
@@ -262,7 +298,7 @@
                         destination_url: destinationUrl
                     })
                 });
-                const data = await res.json();
+                var data = await res.json();
                 if (!res.ok) {
                     pinResult.textContent = '❌ ' + (data.error || 'Failed to create pin.');
                     pinResult.style.color = 'var(--color-error)';
@@ -279,12 +315,32 @@
         });
     }
 
+    // ─── Disconnect ───
+    async function disconnectPinterest() {
+        if (!isBackendConfigured()) return;
+        try {
+            var res = await fetch(BACKEND + '/api/pinterest/disconnect', {
+                method: 'POST',
+                credentials: 'include',
+                headers: authHeaders({ 'Content-Type': 'application/json' })
+            });
+            var data = await res.json();
+            if (data.disconnected) {
+                sessionToken = null;
+                localStorage.removeItem(SESSION_TOKEN_KEY);
+                showDisconnectedUI();
+            }
+        } catch {
+            showError(disconnectError, 'Could not reach the server.');
+        }
+    }
+
     // ─── Disconnect button (both pages) ───
     if (homeDisconnectBtn) {
         homeDisconnectBtn.addEventListener('click', disconnectPinterest);
     }
 
-    const disconnectBtnOnPage = document.getElementById('disconnect-pinterest-btn');
+    var disconnectBtnOnPage = document.getElementById('disconnect-pinterest-btn');
     if (disconnectBtnOnPage && disconnectBtnOnPage !== homeDisconnectBtn) {
         disconnectBtnOnPage.addEventListener('click', disconnectPinterest);
     }
@@ -297,13 +353,14 @@
     }
 
     function escapeHtml(text) {
-        const div = document.createElement('div');
+        var div = document.createElement('div');
         div.appendChild(document.createTextNode(text));
         return div.innerHTML;
     }
 
     // ─── Init ───
     updateConnectLinks();
-    handleUrlParams();
-    checkStatus();
+    handleUrlParams().then(function () {
+        checkStatus();
+    });
 })();
