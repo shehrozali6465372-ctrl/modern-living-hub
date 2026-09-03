@@ -69,6 +69,10 @@ app.use(
     sameSite: isProduction ? "none" : "lax"
   })
 );
+// Security: cookie-session stores only {sessionId, oauth_state} in the cookie.
+// Pinterest access_token and refresh_token are stored server-side in tokenStore,
+// NEVER in the cookie. The cookie is signed (tamper-proof) and HttpOnly (no JS access).
+// tokenStore is ephemeral — tokens are lost if the process restarts (user reconnects).
 
 // ─── CORS ───
 // Only allow the actual frontend origin.
@@ -100,12 +104,40 @@ app.use((req, res, next) => {
   next();
 });
 
+// ─── Server-side token store (in-memory, survives hibernation within a single process) ───
+// Tokens are NEVER in the cookie. The cookie only holds an opaque session ID.
+// On Render free tier, tokens are lost if the process restarts — user reconnects.
+const tokenStore = new Map();
+const TOKEN_TTL_MS = 1000 * 60 * 60; // 1 hour
+
+function storeTokens(sessionId, pinterestData) {
+  tokenStore.set(sessionId, {
+    pinterest: pinterestData,
+    expires: Date.now() + TOKEN_TTL_MS
+  });
+}
+
+function getTokens(sessionId) {
+  const entry = tokenStore.get(sessionId);
+  if (!entry) return null;
+  if (Date.now() > entry.expires) {
+    tokenStore.delete(sessionId);
+    return null;
+  }
+  return entry.pinterest;
+}
+
+function deleteTokens(sessionId) {
+  tokenStore.delete(sessionId);
+}
+
 // ─── Auth helpers ───
 
 /** Get the authenticated user's saved Pinterest token (server-side). */
 function getUserToken(req) {
-  if (!req.session.pinterest) return null;
-  return req.session.pinterest.access_token || null;
+  const pinterest = getTokens(req.session.sessionId);
+  if (!pinterest) return null;
+  return pinterest.access_token || null;
 }
 
 /** Create a secure random state value for OAuth CSRF protection. */
@@ -142,6 +174,9 @@ app.get("/api/health", (req, res) => {
 // ─── Step 1: Start OAuth — GET /auth/pinterest ───
 app.get("/auth/pinterest", (req, res) => {
   const state = createState();
+  if (!req.session.sessionId) {
+    req.session.sessionId = crypto.randomUUID();
+  }
   req.session.oauth_state = state;
   // Also store state in a signed cookie so it survives server restarts / in-memory session wipes.
   // On Render free tier the service can hibernate between OAuth start and callback,
@@ -255,12 +290,14 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       scope: tokenData.scope || null
     }));
 
-    // Store the token server-side only
-    req.session.pinterest = {
+    // Store the token server-side only — NEVER in the cookie.
+    storeTokens(req.session.sessionId, {
       access_token: tokenData.access_token,
       token_type: tokenData.token_type || "bearer",
       connected_at: new Date().toISOString()
-    };
+    });
+    // Clear the oauth_state from the cookie (no longer needed).
+    delete req.session.oauth_state;
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1`);
   } catch (err) {
     console.error("OAuth callback error:", err.message);
@@ -270,18 +307,18 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 
 // ─── Step 3: OAuth status — GET /api/pinterest/status ───
 app.get("/api/pinterest/status", (req, res) => {
-  const token = getUserToken(req);
-  if (!token) {
+  const pinterest = getTokens(req.session.sessionId);
+  if (!pinterest || !pinterest.access_token) {
     return res.json({ connected: false });
   }
-  res.json({ connected: true, connected_at: req.session.pinterest.connected_at });
+  res.json({ connected: true, connected_at: pinterest.connected_at });
 });
 
 // ─── Step 4: Disconnect — POST /api/pinterest/disconnect ───
 app.post("/api/pinterest/disconnect", (req, res) => {
-  if (req.session.pinterest) {
-    delete req.session.pinterest;
-  }
+  deleteTokens(req.session.sessionId);
+  delete req.session.sessionId;
+  delete req.session.oauth_state;
   res.json({ disconnected: true });
 });
 

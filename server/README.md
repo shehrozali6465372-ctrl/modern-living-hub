@@ -96,7 +96,10 @@ In development (`NODE_ENV=development`):
 ## Security
 
 - `PINTEREST_CLIENT_SECRET` is never sent to the frontend.
-- Access tokens are stored only in the server-side session.
+- Access tokens are stored server-side in an ephemeral tokenStore (in-memory Map), NOT in the session cookie.
+- The session cookie only contains an opaque sessionId and oauth_state (both signed).
+- Pinterest access_token and refresh_token are never exposed to the browser or frontend.
+- On Render Free tier, tokens are lost if the process restarts (user reconnects automatically).
 - OAuth `state` parameter is validated on callback (CSRF protection).
 - All environment variables are loaded from `.env` (ignored by git).
 - HTTPS is required in production.
