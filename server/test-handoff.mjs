@@ -17,7 +17,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-const BASE = "http://localhost:3472";
+const BASE = "http://localhost:3470";
 
 await import("./src/server.js");
 await new Promise(r => setTimeout(r, 500));

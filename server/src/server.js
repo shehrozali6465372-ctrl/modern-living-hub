@@ -74,6 +74,72 @@ app.use(
 // NEVER in the cookie. The cookie is signed (tamper-proof) and HttpOnly (no JS access).
 // tokenStore is ephemeral — tokens are lost if the process restarts (user reconnects).
 
+// ─── Encrypted token persistence (survives Render hibernation) ───
+// Pinterest access/refresh tokens are encrypted (AES-256-GCM) and stored in a
+// dedicated HttpOnly, Secure cookie. This cookie survives Render free-tier
+// hibernation (which clears in-memory tokenStore/handoffStore/sessionTokenStore).
+// The encryption key is derived from SESSION_SECRET, so the token is never
+// readable by the browser or GitHub Pages — it is only usable server-side.
+const ENCRYPT_ALGO = "aes-256-gcm";
+
+function deriveEncryptionKey(secret) {
+  return crypto.createHash("sha256").update(secret).digest();
+}
+
+function encryptTokenCookie(data) {
+  try {
+    const key = deriveEncryptionKey(SESSION_SECRET);
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv(ENCRYPT_ALGO, key, iv);
+    const json = JSON.stringify(data);
+    const encrypted = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return iv.toString("base64") + "." + encrypted.toString("base64") + "." + tag.toString("base64");
+  } catch {
+    return null;
+  }
+}
+
+function decryptTokenCookie(encryptedStr) {
+  try {
+    if (!encryptedStr) return null;
+    const [ivB64, encB64, tagB64] = encryptedStr.split(".");
+    if (!ivB64 || !encB64 || !tagB64) return null;
+    const key = deriveEncryptionKey(SESSION_SECRET);
+    const iv = Buffer.from(ivB64, "base64");
+    const encrypted = Buffer.from(encB64, "base64");
+    const tag = Buffer.from(tagB64, "base64");
+    const decipher = crypto.createDecipheriv(ENCRYPT_ALGO, key, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return JSON.parse(decrypted.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function persistTokensCookie(res, pinterestData) {
+  const encrypted = encryptTokenCookie(pinterestData);
+  if (!encrypted) return;
+  res.cookie("mlh.ptoken", encrypted, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    signed: false
+  });
+}
+
+function readTokensCookie(req) {
+  const encrypted = req.cookies["mlh.ptoken"] || req.signedCookies["mlh.ptoken"] || null;
+  return decryptTokenCookie(encrypted);
+}
+
+function clearTokensCookie(res) {
+  res.clearCookie("mlh.ptoken");
+}
+
+
 // ─── CORS ───
 // Only allow the actual frontend origin.
 // Production: https://shehrozali6465372-ctrl.github.io
@@ -126,6 +192,23 @@ function getTokens(sessionId) {
   }
   return entry.pinterest;
 }
+
+
+/** Get Pinterest tokens, falling back to the encrypted cookie if in-memory store is empty (hibernation). */
+function getTokensWithCookie(req, res, sessionId) {
+  let pinterest = sessionId ? getTokens(sessionId) : null;
+  if (pinterest && pinterest.access_token) return pinterest;
+
+  // In-memory store empty (Render hibernation) — try encrypted cookie.
+  const cookieTokens = readTokensCookie(req);
+  if (cookieTokens && cookieTokens.access_token) {
+    // Rehydrate in-memory store for speed.
+    if (sessionId) storeTokens(sessionId, cookieTokens);
+    return cookieTokens;
+  }
+  return null;
+}
+
 
 function deleteTokens(sessionId) {
   tokenStore.delete(sessionId);
@@ -203,6 +286,12 @@ function getUserToken(req) {
     if (sessionId) {
       const pinterest = getTokens(sessionId);
       if (pinterest && pinterest.access_token) return pinterest.access_token;
+      // In-memory empty after hibernation — try encrypted cookie.
+      const cookieTokens = readTokensCookie(req);
+      if (cookieTokens && cookieTokens.access_token) {
+        storeTokens(sessionId, cookieTokens);
+        return cookieTokens.access_token;
+      }
     }
   }
   // 2. Fallback: cookie-based session (same-origin only)
@@ -382,6 +471,8 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       connected_at: connectedAt
     };
     storeTokens(req.session.sessionId, pinterestData);
+    // Persist encrypted Pinterest tokens in HttpOnly cookie to survive Render hibernation.
+    persistTokensCookie(res, pinterestData);
 
     // Generate a one-time handoff code for cross-site OAuth completion.
     // The frontend will POST this code to /api/pinterest/complete to receive
@@ -402,7 +493,7 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 // Accepts: Authorization: Bearer <session_token> (cross-site) OR cookie (same-origin)
 app.get("/api/pinterest/status", (req, res) => {
   const sessionId = getSessionId(req);
-  const pinterest = sessionId ? getTokens(sessionId) : null;
+  const pinterest = getTokensWithCookie(req, res, sessionId);
 
   console.log("Status check:", JSON.stringify({
     auth_method: req.headers.authorization ? "bearer" : "cookie",
@@ -429,10 +520,15 @@ app.post("/api/pinterest/complete", (req, res) => {
     return res.status(400).json({ error: "Invalid or expired handoff code." });
   }
 
-  // Verify the Pinterest tokens still exist for this session
-  const pinterest = getTokens(entry.sessionId);
+  // Verify the Pinterest tokens still exist for this session,
+  // falling back to the encrypted cookie if Render hibernation cleared tokenStore.
+  const pinterest = getTokens(entry.sessionId) || readTokensCookie(req);
   if (!pinterest || !pinterest.access_token) {
     return res.status(400).json({ error: "Pinterest tokens not found. Please reconnect." });
+  }
+  if (!getTokens(entry.sessionId) && pinterest) {
+    // Rehydrate in-memory store from cookie (hibernation recovery).
+    storeTokens(entry.sessionId, pinterest);
   }
 
   // Create an opaque bearer session token for cross-site API calls
@@ -454,6 +550,7 @@ app.post("/api/pinterest/disconnect", (req, res) => {
   }
   delete req.session?.sessionId;
   delete req.session?.oauth_state;
+  clearTokensCookie(res);
   res.json({ disconnected: true });
 });
 
