@@ -17,7 +17,7 @@ import cookieParser from "cookie-parser";
 import "dotenv/config";
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 10000;
 
 // ─── Required environment variables ───
 const CLIENT_ID = process.env.PINTEREST_CLIENT_ID;
@@ -751,8 +751,8 @@ function handleApiError(status, res) {
 }
 
 // ─── Start server ───
-app.listen(PORT, () => {
-  console.log(`Modern Living Hub backend running on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Modern Living Hub backend running on http://0.0.0.0:${PORT}`);
   console.log(`Pinterest OAuth redirect URI: ${REDIRECT_URI}`);
   console.log(`Frontend URL: ${FRONTEND_URL}`);
   console.log(`CORS origin:   ${CORS_ORIGIN}`);
