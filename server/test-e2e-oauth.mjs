@@ -18,12 +18,12 @@ process.env.PINTEREST_REDIRECT_URI = "https://modern-living-hub.onrender.com/aut
 process.env.SESSION_SECRET = "test_e2e_session_secret_key_abcdef1234567890";
 process.env.FRONTEND_URL = "https://shehrozali6465372-ctrl.github.io/modern-living-hub";
 process.env.NODE_ENV = "test";
-process.env.PORT = "3496";
+process.env.PORT = "3497";
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-const BASE = "http://localhost:3496";
+const BASE = "http://localhost:3497";
 
 // Helper: extract cookies
 function extractCookies(setCookieHeaders) {

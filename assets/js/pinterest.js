@@ -42,6 +42,10 @@
         return headers;
     }
 
+    function delay(ms) {
+        return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
     // ─── DOM references ───
     var connectBtn = document.getElementById('connect-pinterest-btn');
     var statusBanner = document.getElementById('pinterest-status');
@@ -246,7 +250,20 @@
                 boardResult.innerHTML = '✅ Board created: <strong>' + escapeHtml(data.board.name) + '</strong>';
                 boardResult.style.color = 'var(--color-success)';
                 createBoardForm.reset();
-                loadBoards();
+                // Refresh board dropdown with retry for Pinterest eventual consistency
+                await delay(800);
+                await loadBoards();
+                // Auto-select the newly created board if present
+                if (boardSelect) {
+                    var newId = data.board.id;
+                    var opts = boardSelect.options;
+                    for (var i = 0; i < opts.length; i++) {
+                        if (opts[i].value === newId) {
+                            boardSelect.selectedIndex = i;
+                            break;
+                        }
+                    }
+                }
             } catch {
                 boardResult.textContent = '❌ Could not reach the server. Please try again.';
                 boardResult.style.color = 'var(--color-error)';
