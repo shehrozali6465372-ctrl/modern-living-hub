@@ -644,7 +644,8 @@ app.post("/api/pinterest/pins", async (req, res) => {
     description: (description || "").toString(),
     media_source: {
       source_type: "image_url",
-      url: image_url.toString()
+      url: image_url.toString(),
+      is_standard: true
     },
     link: destination_url.toString()
   };
@@ -662,7 +663,21 @@ app.post("/api/pinterest/pins", async (req, res) => {
     const data = await apiRes.json().catch(() => ({}));
 
     if (!apiRes.ok) {
-      return handleApiError(apiRes.status, res);
+      // Log safe Pinterest error diagnostics — never log tokens or secrets.
+      console.error("Pin creation Pinterest error:", JSON.stringify({
+        http_status: apiRes.status,
+        pinterest_code: data.code || null,
+        pinterest_message: data.message || null,
+        pinterest_error: data.error || null,
+        pinterest_error_description: data.error_description || null,
+        request_id: data.request_id || data.http_request_id || null
+      }));
+      // Return a useful but safe error message to the frontend.
+      var detail = data.message || data.error_description || data.error || "Unknown Pinterest error";
+      var code = data.code ? " [" + data.code + "]" : "";
+      return res.status(apiRes.status).json({
+        error: "Pinterest rejected the request" + code + ": " + detail
+      });
     }
 
     res.json({
