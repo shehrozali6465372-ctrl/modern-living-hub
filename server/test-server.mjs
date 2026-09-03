@@ -9,12 +9,12 @@ process.env.PINTEREST_REDIRECT_URI = "https://modern-living-hub.onrender.com/aut
 process.env.SESSION_SECRET = "test_session_secret_for_testing_only_abc123xyz";
 process.env.FRONTEND_URL = "https://shehrozali6465372-ctrl.github.io/modern-living-hub";
 process.env.NODE_ENV = "test";
-process.env.PORT = "3458";
+process.env.PORT = "3461";
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-const BASE = "http://localhost:3458";
+const BASE = "http://localhost:3461";
 
 async function req(path, opts = {}) {
   const res = await fetch(BASE + path, { credentials: "include", redirect: "manual", ...opts });

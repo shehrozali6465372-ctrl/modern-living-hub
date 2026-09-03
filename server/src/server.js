@@ -131,13 +131,35 @@ function deleteTokens(sessionId) {
   tokenStore.delete(sessionId);
 }
 
+// ─── Persistent token cookie (survives Render hibernation) ───
+// After successful OAuth, the access token is also stored in a signed, HttpOnly cookie.
+// This cookie is NOT client-readable (HttpOnly), NOT tamperable (signed), and
+// ONLY sent over HTTPS (Secure). It serves as a fallback when the in-memory
+// tokenStore is lost due to process hibernation on Render Free tier.
+const TOKEN_COOKIE_NAME = "mlh.ptoken";
+const TOKEN_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
+  maxAge: 1000 * 60 * 60, // 1 hour — matches tokenStore TTL
+  signed: true
+};
+
 // ─── Auth helpers ───
 
 /** Get the authenticated user's saved Pinterest token (server-side). */
 function getUserToken(req) {
+  // Primary: check in-memory tokenStore
   const pinterest = getTokens(req.session.sessionId);
-  if (!pinterest) return null;
-  return pinterest.access_token || null;
+  if (pinterest && pinterest.access_token) {
+    return pinterest.access_token;
+  }
+  // Fallback: check signed token cookie (survives Render hibernation)
+  const tokenCookie = req.signedCookies[TOKEN_COOKIE_NAME];
+  if (tokenCookie && tokenCookie.access_token) {
+    return tokenCookie.access_token;
+  }
+  return null;
 }
 
 /** Create a secure random state value for OAuth CSRF protection. */
@@ -290,14 +312,25 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       scope: tokenData.scope || null
     }));
 
-    // Store the token server-side only — NEVER in the cookie.
-    storeTokens(req.session.sessionId, {
+    // Store the token server-side only — NEVER in the session cookie.
+    const connectedAt = new Date().toISOString();
+    const pinterestData = {
       access_token: tokenData.access_token,
       token_type: tokenData.token_type || "bearer",
-      connected_at: new Date().toISOString()
-    });
+      connected_at: connectedAt
+    };
+    storeTokens(req.session.sessionId, pinterestData);
+
+    // Also store in a signed, HttpOnly cookie as a fallback for cross-origin
+    // requests and Render Free tier hibernation. The cookie is NOT client-readable.
+    res.cookie(TOKEN_COOKIE_NAME, {
+      access_token: tokenData.access_token,
+      connected_at: connectedAt
+    }, TOKEN_COOKIE_OPTIONS);
+
     // Clear the oauth_state from the cookie (no longer needed).
     delete req.session.oauth_state;
+    console.log("Callback complete: token stored in tokenStore and cookie. Redirecting to frontend.");
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1`);
   } catch (err) {
     console.error("OAuth callback error:", err.message);
@@ -307,7 +340,34 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 
 // ─── Step 3: OAuth status — GET /api/pinterest/status ───
 app.get("/api/pinterest/status", (req, res) => {
-  const pinterest = getTokens(req.session.sessionId);
+  const sessionPresent = Boolean(req.session && req.session.sessionId);
+  const sessionId = req.session?.sessionId || null;
+
+  // Primary: check in-memory tokenStore
+  let pinterest = sessionId ? getTokens(sessionId) : null;
+  let source = "tokenStore";
+
+  // Fallback: check signed token cookie
+  if (!pinterest || !pinterest.access_token) {
+    const tokenCookie = req.signedCookies[TOKEN_COOKIE_NAME];
+    if (tokenCookie && tokenCookie.access_token) {
+      pinterest = tokenCookie;
+      source = "cookie";
+      // Re-populate tokenStore from cookie (recover from hibernation)
+      if (sessionId) {
+        storeTokens(sessionId, pinterest);
+        console.log("Status: recovered tokens from cookie to tokenStore");
+      }
+    }
+  }
+
+  console.log("Status check:", JSON.stringify({
+    session_present: sessionPresent,
+    tokenStore_hit: source === "tokenStore" && Boolean(pinterest?.access_token),
+    cookie_hit: source === "cookie" && Boolean(pinterest?.access_token),
+    connected: Boolean(pinterest?.access_token)
+  }));
+
   if (!pinterest || !pinterest.access_token) {
     return res.json({ connected: false });
   }
@@ -319,6 +379,8 @@ app.post("/api/pinterest/disconnect", (req, res) => {
   deleteTokens(req.session.sessionId);
   delete req.session.sessionId;
   delete req.session.oauth_state;
+  // Also clear the persistent token cookie
+  res.clearCookie(TOKEN_COOKIE_NAME, { signed: true });
   res.json({ disconnected: true });
 });
 

@@ -97,9 +97,12 @@ In development (`NODE_ENV=development`):
 
 - `PINTEREST_CLIENT_SECRET` is never sent to the frontend.
 - Access tokens are stored server-side in an ephemeral tokenStore (in-memory Map), NOT in the session cookie.
-- The session cookie only contains an opaque sessionId and oauth_state (both signed).
-- Pinterest access_token and refresh_token are never exposed to the browser or frontend.
-- On Render Free tier, tokens are lost if the process restarts (user reconnects automatically).
+- After successful OAuth, tokens are ALSO stored in a signed, HttpOnly cookie (`mlh.ptoken`) as a fallback.
+- The signed token cookie survives Render Free tier hibernation and cross-origin cookie issues.
+- The cookie is NOT client-readable (HttpOnly), NOT tamperable (signed with HMAC-SHA256), and ONLY sent over HTTPS (Secure).
+- The session cookie (`mlh.sid`) only contains an opaque sessionId and oauth_state.
+- Pinterest access_token and refresh_token are never exposed to the frontend JavaScript.
+- On Render Free tier, the tokenStore may be lost on hibernation, but the signed cookie provides a reliable fallback.
 - OAuth `state` parameter is validated on callback (CSRF protection).
 - All environment variables are loaded from `.env` (ignored by git).
 - HTTPS is required in production.
