@@ -11,7 +11,7 @@
  */
 
 import express from "express";
-import session from "express-session";
+import cookieSession from "cookie-session";
 import crypto from "node:crypto";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
@@ -55,24 +55,18 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser(SESSION_SECRET));
 
-// ─── Session configuration ───
-// In production (GitHub Pages frontend on different origin):
-//   - SameSite=None is required so the cookie is sent on cross-origin requests from the frontend
-//   - Secure=true is required by browsers when SameSite=None
-// In development:
-//   - SameSite="lax" is sufficient for localhost
+// ─── Session configuration (cookie-session) ───
+// Stores the entire session in a signed cookie — no server-side state.
+// This survives Render free tier hibernation between OAuth callback and
+// the subsequent cross-origin API request from GitHub Pages.
 app.use(
-  session({
+  cookieSession({
     name: "mlh.sid",
-    secret: SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 7 // 7 days
-    }
+    keys: [SESSION_SECRET],
+    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    secure: isProduction,
+    httpOnly: true,
+    sameSite: isProduction ? "none" : "lax"
   })
 );
 
@@ -159,14 +153,8 @@ app.get("/auth/pinterest", (req, res) => {
     maxAge: 1000 * 60 * 10, // 10 minutes — enough for the OAuth flow
     signed: true
   });
-  console.log("OAuth start: state generated (length=" + state.length + "), session.id present=" + Boolean(req.session.id));
-  req.session.save((err) => {
-    if (err) {
-      console.error("Session save error:", err.message);
-      return res.status(500).json({ error: "Could not start authentication." });
-    }
-    res.redirect(buildAuthUrl(state));
-  });
+  console.log("OAuth start: state generated (length=" + state.length + "), session present=" + Boolean(req.session));
+  res.redirect(buildAuthUrl(state));
 });
 
 // ─── Step 2: OAuth callback — GET /auth/pinterest/callback ───
@@ -174,7 +162,7 @@ app.get("/auth/pinterest/callback", async (req, res) => {
   const { code, state, error, error_description } = req.query;
   // Read the backup state from the signed cookie (survives server restarts).
   const cookieState = req.signedCookies["mlh.oauth_state"] || null;
-  console.log("OAuth callback: session.id present=" + Boolean(req.session.id) + ", session_state present=" + Boolean(req.session.oauth_state) + ", cookie_state present=" + Boolean(cookieState) + ", callback_state present=" + Boolean(state));
+  console.log("OAuth callback: session present=" + Boolean(req.session) + ", session_state present=" + Boolean(req.session.oauth_state) + ", cookie_state present=" + Boolean(cookieState) + ", callback_state present=" + Boolean(state));
 
   // Handle OAuth denial
   if (error) {
@@ -273,9 +261,7 @@ app.get("/auth/pinterest/callback", async (req, res) => {
       token_type: tokenData.token_type || "bearer",
       connected_at: new Date().toISOString()
     };
-    req.session.save(() => {
-      res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1`);
-    });
+    res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1`);
   } catch (err) {
     console.error("OAuth callback error:", err.message);
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Network error during Pinterest authentication.")}`);
@@ -296,9 +282,7 @@ app.post("/api/pinterest/disconnect", (req, res) => {
   if (req.session.pinterest) {
     delete req.session.pinterest;
   }
-  req.session.save(() => {
-    res.json({ disconnected: true });
-  });
+  res.json({ disconnected: true });
 });
 
 // ─── Step 5: Get user's boards — GET /api/pinterest/boards ───
