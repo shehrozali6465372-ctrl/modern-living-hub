@@ -673,7 +673,11 @@ app.post("/api/pinterest/pins", async (req, res) => {
         request_id: data.request_id || data.http_request_id || null
       }));
       // Return a useful but safe error message to the frontend.
+      // Include error_description (e.g. scope info) when it differs from message.
       var detail = data.message || data.error_description || data.error || "Unknown Pinterest error";
+      if (data.error_description && data.error_description !== data.message) {
+        detail += " — " + data.error_description;
+      }
       var code = data.code ? " [" + data.code + "]" : "";
       return res.status(apiRes.status).json({
         error: "Pinterest rejected the request" + code + ": " + detail
