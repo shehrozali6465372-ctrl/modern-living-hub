@@ -24,12 +24,12 @@ process.env.PINTEREST_REDIRECT_URI = "https://modern-living-hub.onrender.com/aut
 process.env.SESSION_SECRET = "test_pin_session_secret_key_1234567890";
 process.env.FRONTEND_URL = "https://shehrozali6465372-ctrl.github.io/modern-living-hub";
 process.env.NODE_ENV = "test";
-process.env.PORT = "3499";
+process.env.PORT = "3507";
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-const BASE = "http://localhost:3499";
+const BASE = "http://localhost:3507";
 
 function parseCookies(headers) {
   const cookies = {};
@@ -540,3 +540,147 @@ describe("Create Pin — Full E2E Flow", () => {
 });
 
 console.log("\n✅ Create Pin E2E flow test complete.\n");
+
+describe("Forced Reauthorization — prompt=consent", () => {
+
+  it("15. GET /auth/pinterest?prompt=consent includes prompt in Pinterest URL", async () => {
+    const r = await fetch(BASE + "/auth/pinterest?prompt=consent", { redirect: "manual" });
+    assert.equal(r.status, 302);
+    const loc = r.headers.get("location");
+    assert.ok(loc.startsWith("https://www.pinterest.com/oauth/"), "Redirects to Pinterest");
+    const url = new URL(loc);
+    assert.equal(url.searchParams.get("prompt"), "consent", "prompt=consent in Pinterest URL");
+    assert.equal(url.searchParams.get("scope"), "boards:read,boards:write,pins:read,pins:write",
+      "All 4 scopes present");
+    // CSRF state still present
+    assert.ok(url.searchParams.get("state"), "CSRF state present");
+    // No tokens in URL
+    assert.ok(!loc.includes("access_token"), "No access_token in URL");
+    assert.ok(!loc.includes("refresh_token"), "No refresh_token in URL");
+  });
+
+  it("16. GET /auth/pinterest without prompt — no prompt param in Pinterest URL", async () => {
+    const r = await fetch(BASE + "/auth/pinterest", { redirect: "manual" });
+    assert.equal(r.status, 302);
+    const loc = r.headers.get("location");
+    const url = new URL(loc);
+    assert.equal(url.searchParams.get("prompt"), null, "No prompt param for normal flow");
+    assert.ok(url.searchParams.get("state"), "CSRF state still present");
+  });
+
+  it("17. Status needs_reauth response triggers prompt=consent in frontend", async () => {
+    // Simulate: OAuth with limited scopes → status returns needs_reauth
+    const _origFetch = globalThis.fetch;
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("api.pinterest.com/v5/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          access_token: "limited_scope_token_2",
+          refresh_token: "limited_refresh_2",
+          token_type: "bearer",
+          scope: "boards:read"
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/user_account")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_USER),
+          { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/boards")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_BOARDS),
+          { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      return _origFetch(url, opts);
+    };
+    try {
+      const limitedToken = await completeOAuthFlow();
+      const r = await fetch(BASE + "/api/pinterest/status", {
+        headers: { "Authorization": "Bearer " + limitedToken }
+      });
+      const data = await r.json();
+      assert.equal(data.connected, false);
+      assert.equal(data.needs_reauth, true, "needs_reauth flag set");
+      assert.ok(data.error.includes("reconnect"), "Error tells user to reconnect");
+    } finally { globalThis.fetch = _origFetch; }
+  });
+
+  it("18. Forced reauth: full OAuth flow with prompt=consent produces valid token", async () => {
+    const _origFetch = globalThis.fetch;
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("api.pinterest.com/v5/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          access_token: "fresh_full_scope_token",
+          refresh_token: "fresh_full_scope_refresh",
+          token_type: "bearer",
+          scope: "boards:read boards:write pins:read pins:write"
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/user_account")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_USER),
+          { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/boards") && (!opts || opts.method !== "POST")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_BOARDS),
+          { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/pins") && opts?.method === "POST") {
+        return Promise.resolve(new Response(JSON.stringify({
+          id: "pin_fresh_001", title: "Fresh Token Pin",
+          link: "https://example.com", board_id: "board_abc_123",
+          created_at: "2026-09-04T00:00:00Z"
+        }), { status: 201, headers: { "Content-Type": "application/json" } }));
+      }
+      return _origFetch(url, opts);
+    };
+    try {
+      // Start OAuth WITH prompt=consent
+      const r1 = await fetch(BASE + "/auth/pinterest?prompt=consent", { redirect: "manual" });
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      assert.equal(new URL(loc).searchParams.get("prompt"), "consent");
+
+      // Complete callback
+      const r2 = await fetch(
+        BASE + "/auth/pinterest/callback?code=fresh_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+      const handoffCode = new URL(r2.headers.get("location")).searchParams.get("handoff");
+      assert.ok(handoffCode, "Handoff code from forced reauth");
+
+      // Complete handoff
+      const r3 = await fetch(BASE + "/api/pinterest/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handoff: handoffCode })
+      });
+      const data = await r3.json();
+      assert.equal(data.connected, true);
+
+      // Verify token has all scopes
+      const r4 = await fetch(BASE + "/api/pinterest/status", {
+        headers: { "Authorization": "Bearer " + data.session_token }
+      });
+      const status = await r4.json();
+      assert.equal(status.connected, true, "Fresh token connected");
+      assert.equal(status.needs_reauth, undefined, "No needs_reauth for fresh token");
+
+      // Verify pin creation works with fresh token
+      const r5 = await fetch(BASE + "/api/pinterest/pins", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + data.session_token
+        },
+        body: JSON.stringify({
+          board_id: "board_abc_123", title: "Fresh Token Pin",
+          image_url: "https://example.com/fresh.jpg",
+          destination_url: "https://example.com"
+        })
+      });
+      assert.equal(r5.status, 200, "Pin creation works with fresh full-scope token");
+    } finally { globalThis.fetch = _origFetch; }
+  });
+});
+
+console.log("\n✅ Forced reauthorization tests complete.\n");

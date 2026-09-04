@@ -327,7 +327,7 @@ function hasRequiredScopes(pinterest) {
 }
 
 /** Build the Pinterest OAuth authorization URL. */
-function buildAuthUrl(state) {
+function buildAuthUrl(state, prompt) {
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     redirect_uri: REDIRECT_URI,
@@ -335,6 +335,7 @@ function buildAuthUrl(state) {
     scope: SCOPES,
     state
   });
+  if (prompt) params.set("prompt", prompt);
   return `${PINTEREST_OAUTH_URL}?${params.toString()}`;
 }
 
@@ -369,8 +370,12 @@ app.get("/auth/pinterest", (req, res) => {
     maxAge: 1000 * 60 * 10, // 10 minutes — enough for the OAuth flow
     signed: true
   });
+  const prompt = req.query.prompt || null;
+  if (prompt) {
+    console.log("OAuth start: prompt=" + prompt + " (forced reauthorization)");
+  }
   console.log("OAuth start: state generated (length=" + state.length + "), session present=" + Boolean(req.session));
-  res.redirect(buildAuthUrl(state));
+  res.redirect(buildAuthUrl(state, prompt));
 });
 
 // ─── Step 2: OAuth callback — GET /auth/pinterest/callback ───
@@ -646,8 +651,11 @@ app.post("/api/pinterest/pins", async (req, res) => {
   }
 
   // Check that the token has the required scopes (pins:write).
-  const pinterestData = getTokens(getSessionId(req)) || readTokensCookie(req);
-  if (!hasRequiredScopes(pinterestData)) {
+  // Resolve full token object (with scope field) via the same auth chain as getUserToken.
+  const sessionId = getSessionId(req);
+  const tokenObj = sessionId ? getTokens(sessionId) : null;
+  const tokenCookieObj = readTokensCookie(req);
+  if (!hasRequiredScopes(tokenObj || tokenCookieObj)) {
     return res.status(403).json({
       error: "Your Pinterest token is missing required scopes (pins:write). Please disconnect and reconnect Pinterest."
     });

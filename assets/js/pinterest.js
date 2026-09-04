@@ -63,8 +63,9 @@
     var disconnectError = document.getElementById('disconnect-error');
 
     // ─── Update Connect Pinterest links to point to backend OAuth ───
-    function updateConnectLinks() {
+    function updateConnectLinks(prompt) {
         var authUrl = isBackendConfigured() ? BACKEND + '/auth/pinterest' : '#';
+        if (prompt) authUrl += '?prompt=' + encodeURIComponent(prompt);
         document.querySelectorAll('a.btn-pinterest').forEach(function (link) {
             if (link.id !== 'disconnect-pinterest-btn') {
                 link.href = authUrl;
@@ -146,12 +147,13 @@
             if (data.connected) {
                 showConnectedUI();
             } else if (data.needs_reauth) {
-                // Token lacks required scopes — show clear reconnect message
+                // Token lacks required scopes — force fresh OAuth with prompt=consent
                 sessionToken = null;
                 localStorage.removeItem(SESSION_TOKEN_KEY);
                 showDisconnectedUI();
+                updateConnectLinks('consent');
                 if (disconnectError) {
-                    disconnectError.textContent = '⚠️ Your Pinterest token is missing required permissions. Please disconnect and reconnect Pinterest.';
+                    disconnectError.textContent = '⚠️ Your Pinterest token is missing required permissions. Please reconnect Pinterest to grant all permissions.';
                     disconnectError.style.display = 'block';
                 }
             } else {
