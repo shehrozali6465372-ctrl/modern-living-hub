@@ -29,6 +29,14 @@ const CORS_ORIGIN = new URL(FRONTEND_URL).origin;
 
 const isProduction = process.env.NODE_ENV === "production";
 
+// ─── Sandbox configuration (temporary testing) ───
+// Set PINTEREST_SANDBOX_TOKEN and PINTEREST_API_BASE_URL in environment
+// to test against Pinterest Sandbox instead of production.
+// To switch back to production: remove these env vars or set them to empty.
+const SANDBOX_TOKEN = process.env.PINTEREST_SANDBOX_TOKEN || null;
+const SANDBOX_API_BASE = process.env.PINTEREST_API_BASE_URL || null;
+const isSandbox = Boolean(SANDBOX_TOKEN && SANDBOX_API_BASE);
+
 if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI || !SESSION_SECRET) {
   console.error(
     "Missing required environment variables. Check PINTEREST_CLIENT_ID, PINTEREST_CLIENT_SECRET, PINTEREST_REDIRECT_URI, SESSION_SECRET."
@@ -45,6 +53,17 @@ if (!FRONTEND_URL) {
 const PINTEREST_OAUTH_URL = "https://www.pinterest.com/oauth/";
 const PINTEREST_TOKEN_URL = "https://api.pinterest.com/v5/oauth/token";
 const PINTEREST_API_BASE = "https://api.pinterest.com/v5";
+
+/** Get the effective API base URL (sandbox or production). */
+function getApiBaseUrl() {
+  return isSandbox ? SANDBOX_API_BASE : PINTEREST_API_BASE;
+}
+
+/** Get the effective API token for a request (sandbox or user's OAuth token). */
+function getEffectiveToken(req) {
+  if (isSandbox) return SANDBOX_TOKEN;
+  return getUserToken(req);
+}
 
 // Required OAuth scopes for this demo
 const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write"].join(",");
@@ -349,7 +368,8 @@ app.get("/api/health", (req, res) => {
     pinterest_client_id_configured: Boolean(CLIENT_ID),
     redirect_uri_configured: Boolean(REDIRECT_URI),
     frontend_url_configured: Boolean(FRONTEND_URL),
-    production_mode: isProduction
+    production_mode: isProduction,
+    sandbox_mode: isSandbox
   });
 });
 
@@ -577,13 +597,13 @@ app.post("/api/pinterest/disconnect", (req, res) => {
 
 // ─── Step 5: Get user's boards — GET /api/pinterest/boards ───
 app.get("/api/pinterest/boards", async (req, res) => {
-  const token = getUserToken(req);
+  const token = getEffectiveToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
   }
 
   try {
-    const apiRes = await fetch(`${PINTEREST_API_BASE}/boards`, {
+    const apiRes = await fetch(`${getApiBaseUrl()}/boards`, {
       headers: {
         Authorization: `Bearer ${token}`
       }
@@ -604,13 +624,13 @@ app.get("/api/pinterest/boards", async (req, res) => {
 
 // ─── Step 5b: Verify connection — GET /api/pinterest/account ───
 app.get("/api/pinterest/account", async (req, res) => {
-  const token = getUserToken(req);
+  const token = getEffectiveToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
   }
 
   try {
-    const apiRes = await fetch(`${PINTEREST_API_BASE}/user_account`, {
+    const apiRes = await fetch(`${getApiBaseUrl()}/user_account`, {
       headers: { Authorization: `Bearer ${token}` }
     });
 
@@ -645,20 +665,22 @@ app.get("/api/pinterest/account", async (req, res) => {
 
 // ─── Step 6: Create a Pin — POST /api/pinterest/pins ───
 app.post("/api/pinterest/pins", async (req, res) => {
-  const token = getUserToken(req);
+  const token = getEffectiveToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
   }
 
   // Check that the token has the required scopes (pins:write).
-  // Resolve full token object (with scope field) via the same auth chain as getUserToken.
-  const sessionId = getSessionId(req);
-  const tokenObj = sessionId ? getTokens(sessionId) : null;
-  const tokenCookieObj = readTokensCookie(req);
-  if (!hasRequiredScopes(tokenObj || tokenCookieObj)) {
-    return res.status(403).json({
-      error: "Your Pinterest token is missing required scopes (pins:write). Please disconnect and reconnect Pinterest."
-    });
+  // Skip in sandbox mode — the sandbox token is pre-configured with correct scopes.
+  if (!isSandbox) {
+    const sessionId = getSessionId(req);
+    const tokenObj = sessionId ? getTokens(sessionId) : null;
+    const tokenCookieObj = readTokensCookie(req);
+    if (!hasRequiredScopes(tokenObj || tokenCookieObj)) {
+      return res.status(403).json({
+        error: "Your Pinterest token is missing required scopes (pins:write). Please disconnect and reconnect Pinterest."
+      });
+    }
   }
 
   const { board_id, title, description, image_url, destination_url } = req.body;
@@ -683,7 +705,7 @@ app.post("/api/pinterest/pins", async (req, res) => {
   };
 
   try {
-    const apiRes = await fetch(`${PINTEREST_API_BASE}/pins`, {
+    const apiRes = await fetch(`${getApiBaseUrl()}/pins`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -734,7 +756,7 @@ app.post("/api/pinterest/pins", async (req, res) => {
 
 // ─── Step 7: Create a Board — POST /api/pinterest/boards ───
 app.post("/api/pinterest/boards", async (req, res) => {
-  const token = getUserToken(req);
+  const token = getEffectiveToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
   }
@@ -751,7 +773,7 @@ app.post("/api/pinterest/boards", async (req, res) => {
   };
 
   try {
-    const apiRes = await fetch(`${PINTEREST_API_BASE}/boards`, {
+    const apiRes = await fetch(`${getApiBaseUrl()}/boards`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
