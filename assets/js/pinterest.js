@@ -145,6 +145,15 @@
             var data = await res.json();
             if (data.connected) {
                 showConnectedUI();
+            } else if (data.needs_reauth) {
+                // Token lacks required scopes — show clear reconnect message
+                sessionToken = null;
+                localStorage.removeItem(SESSION_TOKEN_KEY);
+                showDisconnectedUI();
+                if (disconnectError) {
+                    disconnectError.textContent = '⚠️ Your Pinterest token is missing required permissions. Please disconnect and reconnect Pinterest.';
+                    disconnectError.style.display = 'block';
+                }
             } else {
                 // Session token expired or invalid — clear it
                 if (sessionToken) {
