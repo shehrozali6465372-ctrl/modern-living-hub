@@ -420,7 +420,99 @@ describe("Create Pin — Full E2E Flow", () => {
     } finally { globalThis.fetch = _origFetch; }
   });
 
-  it("11. Disconnect → all tokens invalidated", async () => {
+  it("11. Status returns needs_reauth when scopes are insufficient", async () => {
+    // Do a full OAuth flow but with token that has only boards:read
+    const _origFetch = globalThis.fetch;
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("api.pinterest.com/v5/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          access_token: "limited_scope_token",
+          refresh_token: "limited_refresh",
+          token_type: "bearer",
+          scope: "boards:read"
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/user_account")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_USER),
+          { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/boards")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_BOARDS),
+          { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      return _origFetch(url, opts);
+    };
+    try {
+      const limitedToken = await completeOAuthFlow();
+      // Status should report needs_reauth
+      const r = await fetch(BASE + "/api/pinterest/status", {
+        headers: { "Authorization": "Bearer " + limitedToken }
+      });
+      const data = await r.json();
+      assert.equal(data.connected, false, "Should not be connected with insufficient scopes");
+      assert.equal(data.needs_reauth, true, "Should flag needs_reauth");
+      assert.ok(data.error.includes("pins:write"), "Error should mention pins:write");
+    } finally { globalThis.fetch = _origFetch; }
+  });
+
+  it("12. Pin creation blocked when scopes are insufficient (403)", async () => {
+    const _origFetch = globalThis.fetch;
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("api.pinterest.com/v5/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          access_token: "no_write_token",
+          refresh_token: "no_write_refresh",
+          token_type: "bearer",
+          scope: "boards:read boards:write pins:read"
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/user_account")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_USER),
+          { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (urlStr.includes("api.pinterest.com/v5/boards")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_BOARDS),
+          { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      return _origFetch(url, opts);
+    };
+    try {
+      const limitedToken = await completeOAuthFlow();
+      // Pin creation should be blocked with 403
+      const r = await fetch(BASE + "/api/pinterest/pins", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + limitedToken
+        },
+        body: JSON.stringify({
+          board_id: "board_abc_123", title: "T",
+          image_url: "https://example.com/i.jpg",
+          destination_url: "https://example.com"
+        })
+      });
+      assert.equal(r.status, 403, "Should be 403 for missing pins:write");
+      const data = await r.json();
+      assert.ok(data.error.includes("pins:write"), "Error should mention pins:write");
+      assert.ok(data.error.includes("reconnect"), "Error should suggest reconnecting");
+      // SECURITY: No tokens in error
+      assert.ok(!data.error.includes("no_write_token"));
+    } finally { globalThis.fetch = _origFetch; }
+  });
+
+  it("13. Full-scope token passes scope validation", async () => {
+    // Verify that the main test's token (with all 4 scopes) passes validation
+    const r = await fetch(BASE + "/api/pinterest/status", {
+      headers: { "Authorization": "Bearer " + TS.sessionToken }
+    });
+    const data = await r.json();
+    assert.equal(data.connected, true, "Full-scope token should be connected");
+    assert.equal(data.needs_reauth, undefined, "Should NOT flag needs_reauth");
+  });
+
+  it("14. Disconnect → all tokens invalidated", async () => {
     const r1 = await fetch(BASE + "/api/pinterest/disconnect", {
       method: "POST",
       headers: {

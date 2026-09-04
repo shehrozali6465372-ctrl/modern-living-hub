@@ -48,6 +48,7 @@ const PINTEREST_API_BASE = "https://api.pinterest.com/v5";
 
 // Required OAuth scopes for this demo
 const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write"].join(",");
+const REQUIRED_SCOPES = SCOPES.split(",");
 
 // ─── Middleware ───
 app.set("trust proxy", 1);
@@ -318,6 +319,13 @@ function createState() {
   return crypto.randomBytes(32).toString("hex");
 }
 
+/** Check if token has all required scopes. */
+function hasRequiredScopes(pinterest) {
+  if (!pinterest || !pinterest.scope) return false;
+  const granted = pinterest.scope.split(/\s+/);
+  return REQUIRED_SCOPES.every(s => granted.includes(s));
+}
+
 /** Build the Pinterest OAuth authorization URL. */
 function buildAuthUrl(state) {
   const params = new URLSearchParams({
@@ -468,6 +476,7 @@ app.get("/auth/pinterest/callback", async (req, res) => {
     const pinterestData = {
       access_token: tokenData.access_token,
       token_type: tokenData.token_type || "bearer",
+      scope: tokenData.scope || SCOPES,
       connected_at: connectedAt
     };
     storeTokens(req.session.sessionId, pinterestData);
@@ -495,13 +504,20 @@ app.get("/api/pinterest/status", (req, res) => {
   const sessionId = getSessionId(req);
   const pinterest = getTokensWithCookie(req, res, sessionId);
 
+  const scopesOk = hasRequiredScopes(pinterest);
+
   console.log("Status check:", JSON.stringify({
     auth_method: req.headers.authorization ? "bearer" : "cookie",
-    connected: Boolean(pinterest?.access_token)
+    connected: Boolean(pinterest?.access_token),
+    scopes_ok: scopesOk
   }));
 
   if (!pinterest || !pinterest.access_token) {
     return res.json({ connected: false });
+  }
+  if (!scopesOk) {
+    return res.json({ connected: false, needs_reauth: true,
+      error: "Token is missing required Pinterest scopes (pins:write). Please reconnect." });
   }
   res.json({ connected: true, connected_at: pinterest.connected_at });
 });
@@ -627,6 +643,14 @@ app.post("/api/pinterest/pins", async (req, res) => {
   const token = getUserToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
+  }
+
+  // Check that the token has the required scopes (pins:write).
+  const pinterestData = getTokens(getSessionId(req)) || readTokensCookie(req);
+  if (!hasRequiredScopes(pinterestData)) {
+    return res.status(403).json({
+      error: "Your Pinterest token is missing required scopes (pins:write). Please disconnect and reconnect Pinterest."
+    });
   }
 
   const { board_id, title, description, image_url, destination_url } = req.body;
