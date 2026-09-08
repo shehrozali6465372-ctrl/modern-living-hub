@@ -823,6 +823,10 @@ function handleApiError(status, res) {
   }
 }
 
+// ─── TikTok integration (isolated module) ───
+import { registerTikTokRoutes } from "./tiktok.js";
+registerTikTokRoutes(app, { SESSION_SECRET, FRONTEND_URL, isProduction });
+
 // ─── Start server ───
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Modern Living Hub backend running on http://0.0.0.0:${PORT}`);

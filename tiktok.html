@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Integration — Modern Living Hub</title>
+    <meta name="description" content="Connect your TikTok account to Modern Living Hub and publish videos through the TikTok Content Posting API.">
+    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <!-- Navigation -->
+    <header class="site-header">
+        <nav class="navbar" role="navigation" aria-label="Main navigation">
+            <div class="container nav-container">
+                <a href="/" class="logo">
+                    <img src="assets/images/logo.png" alt="Modern Living Hub Logo" width="40" height="40">
+                    <span class="logo-text">Modern Living Hub</span>
+                </a>
+                <button class="nav-toggle" aria-label="Toggle navigation" aria-expanded="false">
+                    <span class="hamburger"></span>
+                </button>
+                <ul class="nav-links">
+                    <li><a href="/">Home</a></li>
+                    <li><a href="about.html">About</a></li>
+                    <li><a href="contact.html">Contact</a></li>
+                    <li><a href="privacy-policy.html">Privacy</a></li>
+                    <li><a href="terms-of-service.html">Terms</a></li>
+                    <li><a href="pinterest.html">Pinterest</a></li>
+                    <li><a href="tiktok.html" class="active">TikTok</a></li>
+                </ul>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Page Hero -->
+    <section class="page-hero">
+        <div class="container">
+            <h1>TikTok Integration</h1>
+            <p>Connect your TikTok creator account and publish videos directly from Modern Living Hub.</p>
+        </div>
+    </section>
+
+    <main class="container" style="padding-top:2rem; padding-bottom:3rem;">
+        <div id="connection-panel">
+            <!-- Not connected state -->
+            <div id="disconnected-state" class="pinterest-card">
+                <h3>Connect Your TikTok Account</h3>
+                <p>Link your TikTok creator account to publish videos through the TikTok Content Posting API.</p>
+                <a href="/tiktok/auth" class="btn btn-tiktok" id="connect-tiktok-btn">
+                    🎵 Connect TikTok
+                </a>
+                <p id="disconnect-error" style="color:var(--color-error); margin-top:1rem; display:none;"></p>
+            </div>
+
+            <!-- Connected state -->
+            <div id="connected-state" class="pinterest-card" style="display:none;">
+                <div class="pinterest-connected-banner">
+                    <span class="pinterest-connected">✅ TikTok Connected</span>
+                    <button class="btn btn-disconnect" id="disconnect-tiktok-btn">Disconnect TikTok</button>
+                </div>
+
+                <!-- Creator info -->
+                <div class="pinterest-card-section">
+                    <h3>Connected Creator</h3>
+                    <div id="creator-info" class="creator-info">
+                        <p>Loading creator information…</p>
+                    </div>
+                </div>
+
+                <!-- Direct Post -->
+                <div class="pinterest-card-section">
+                    <h3>Post Video to TikTok</h3>
+                    <form id="post-form" class="pinterest-form">
+                        <div class="form-group">
+                            <label for="video-title">Caption</label>
+                            <input type="text" id="video-title" name="title" placeholder="Your video caption" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="video-file">Select Video File</label>
+                            <input type="file" id="video-file" name="video" accept="video/mp4,video/quicktime,video/*" required>
+                            <p class="form-hint" id="video-constraints" style="font-size:0.85rem; color:var(--color-text-light); margin-top:0.25rem;"></p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="privacy-level">Privacy Setting</label>
+                            <select id="privacy-level" name="privacy_level" required>
+                                <option value="PUBLIC_TO_EVERYONE">Public</option>
+                                <option value="MUTUAL_FOLLOW_FRIENDS">Friends</option>
+                                <option value="FOLLOWER_OF_CREATOR">Followers</option>
+                                <option value="SELF_ONLY">Only Me</option>
+                            </select>
+                            <p class="form-hint" style="font-size:0.85rem; color:var(--color-text-light); margin-top:0.25rem;">
+                                TikTok determines which options are available based on your account.
+                            </p>
+                        </div>
+
+                        <div class="form-group form-checkbox">
+                            <label>
+                                <input type="checkbox" id="disable-duet"> Disable duet
+                            </label>
+                        </div>
+                        <div class="form-group form-checkbox">
+                            <label>
+                                <input type="checkbox" id="disable-comment"> Disable comments
+                            </label>
+                        </div>
+                        <div class="form-group form-checkbox">
+                            <label>
+                                <input type="checkbox" id="disable-stitch"> Disable stitch
+                            </label>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Video Preview</label>
+                            <video id="video-preview" controls style="width:100%; max-width:360px; display:none; border-radius:8px; background:#000;"></video>
+                            <p id="preview-info" style="font-size:0.85rem; color:var(--color-text-light); margin-top:0.25rem;"></p>
+                        </div>
+
+                        <p id="confirm-note" style="font-size:0.9rem; color:var(--color-text-light); margin-bottom:0.75rem;">
+                            By clicking "Post to TikTok" you confirm you have the rights to this video and it complies with TikTok's Community Guidelines.
+                        </p>
+
+                        <button type="submit" class="btn btn-primary" id="post-btn">Post to TikTok</button>
+                        <p id="post-result" style="margin-top:0.75rem;"></p>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-col">
+                    <h4>Modern Living Hub</h4>
+                    <p>Universal AI Content Operating System</p>
+                </div>
+                <div class="footer-col">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="privacy-policy.html">Privacy Policy</a></li>
+                        <li><a href="terms-of-service.html">Terms of Service</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                        <li><a href="security.html">Security</a></li>
+                    </ul>
+                </div>
+                <div class="footer-col">
+                    <h4>More</h4>
+                    <ul>
+                        <li><a href="cookies.html">Cookie Policy</a></li>
+                        <li><a href="disclaimer.html">Disclaimer</a></li>
+                        <li><a href="affiliate-disclosure.html">Affiliate Disclosure</a></li>
+                        <li><a href="sitemap.xml">Sitemap</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 Modern Living Hub. All rights reserved. | <a href="privacy-policy.html">Privacy</a> | <a href="terms-of-service.html">Terms</a></p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="assets/js/main.js" defer></script>
+    <script>
+      window.BACKEND_URL = 'https://modern-living-hub.onrender.com';
+
+      if (!window.BACKEND_URL || window.BACKEND_URL.includes('YOUR-BACKEND')) {
+        document.addEventListener('DOMContentLoaded', function () {
+          var btns = document.querySelectorAll('.btn-tiktok');
+          btns.forEach(function (btn) {
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.5';
+            btn.title = 'TikTok integration requires backend URL configuration';
+          });
+        });
+      }
+    </script>
+    <script src="assets/js/tiktok.js" defer></script>
+</body>
+</html>

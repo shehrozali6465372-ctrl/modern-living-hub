@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Modern Living Hub — Universal AI Content Operating System</title>
     <meta name="description" content="Modern Living Hub is a Universal AI Content Operating System with multi-platform publishing support. Automate, optimize, and scale your content with AI-powered publishing.">
-    <meta name="keywords" content="AI content operating system, AI publishing platform, content automation, Pinterest API, Universal AI OS, Modern Living Hub">
+    <meta name="keywords" content="AI content operating system, AI publishing platform, content automation, Pinterest API, TikTok API, Universal AI OS, Modern Living Hub">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://shehrozali6465372-ctrl.github.io/modern-living-hub/">
     <meta property="og:type" content="website">
@@ -40,6 +40,7 @@
                     <li><a href="privacy-policy.html">Privacy</a></li>
                     <li><a href="terms-of-service.html">Terms</a></li>
                     <li><a href="pinterest.html">Pinterest</a></li>
+                    <li><a href="tiktok.html">TikTok</a></li>
                 </ul>
             </div>
         </nav>
@@ -51,12 +52,15 @@
             <div class="hero-content">
                 <h1>Modern Living Hub</h1>
                 <p class="hero-subtitle">Universal AI Content Operating System</p>
-                <p class="hero-description">Empowering creators and businesses with an AI-driven content ecosystem. Automate publishing across multiple platforms, starting with Pinterest API, and scale your digital presence.</p>
+                <p class="hero-description">Empowering creators and businesses with an AI-driven content ecosystem. Automate publishing across multiple platforms — starting with Pinterest and TikTok — and scale your digital presence.</p>
                 <div class="hero-actions">
                     <a href="about.html" class="btn btn-primary">Learn More</a>
                     <a href="contact.html" class="btn btn-secondary">Get in Touch</a>
                     <a href="/auth/pinterest" class="btn btn-pinterest" id="connect-pinterest-btn">
                         📌 Connect Pinterest
+                    </a>
+                    <a href="/tiktok/auth" class="btn btn-tiktok" id="connect-tiktok-btn">
+                        🎵 Connect TikTok
                     </a>
                 </div>
 
@@ -177,20 +181,21 @@
       // Show a clear error if BACKEND_URL was never configured
       if (!window.BACKEND_URL || window.BACKEND_URL.includes('YOUR-BACKEND')) {
         document.addEventListener('DOMContentLoaded', function () {
-          var banners = document.querySelectorAll('.btn-pinterest');
+          var banners = document.querySelectorAll('.btn-pinterest, .btn-tiktok');
           banners.forEach(function (btn) {
             btn.style.pointerEvents = 'none';
             btn.style.opacity = '0.5';
-            btn.title = 'Pinterest integration requires backend URL configuration';
+            btn.title = 'Platform integration requires backend URL configuration';
           });
           var errDiv = document.createElement('div');
           errDiv.style.cssText = 'background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;margin-top:12px;color:#991b1b;font-size:0.85rem;';
-          errDiv.textContent = '⚠️ Pinterest integration is not configured yet. The backend URL must be set in the source code before this feature works.';
+          errDiv.textContent = '⚠️ Platform integrations are not configured yet. The backend URL must be set in the source code before these features work.';
           var heroActions = document.querySelector('.hero-actions') || document.getElementById('disconnected-state') || document.querySelector('main');
           if (heroActions) heroActions.appendChild(errDiv);
         });
       }
     </script>
     <script src="assets/js/pinterest.js" defer></script>
+    <script src="assets/js/tiktok.js" defer></script>
 </body>
 </html>
