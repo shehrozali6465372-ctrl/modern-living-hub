@@ -345,6 +345,161 @@ describe("TikTok Integration", () => {
     const data = await r2.json();
     assert.equal(data.connected, false, "Should be disconnected");
   });
+
+  it("12. Token exchange diagnostic logging - success path", async () => {
+    const _origFetch = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("open.tiktokapis.com/v2/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_TIKTOK_TOKEN), {
+          status: 200, headers: { "Content-Type": "application/json" }
+        }));
+      }
+      return _origFetch(url, opts);
+    };
+
+    try {
+      const r1 = await fetch(BASE + "/tiktok/auth", { redirect: "manual" });
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+
+      await fetch(
+        BASE + "/tiktok/auth/callback?code=diag_test_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+
+      const tokenLogs = _logs.filter(l => l.includes("[tiktok-token]"));
+      assert.ok(tokenLogs.length >= 1, "Should have [tiktok-token] diagnostic logs");
+
+      const statusLog = tokenLogs.find(l => l.includes("[tiktok-token] HTTP"));
+      assert.ok(statusLog, "Should log HTTP status");
+      assert.ok(statusLog.includes("200"), "Should log status 200");
+
+      const contentTypeLog = tokenLogs.find(l => l.includes("content-type="));
+      assert.ok(contentTypeLog, "Should log content-type");
+
+      const bodyLog = tokenLogs.find(l => l.includes("body_preview="));
+      assert.ok(bodyLog, "Should log body preview");
+      assert.ok(!bodyLog.includes("mock_tiktok_access_token"), "Must NOT log raw access token");
+      assert.ok(!bodyLog.includes("mock_tiktok_refresh_token"), "Must NOT log raw refresh token");
+
+      const successLog = tokenLogs.find(l => l.includes("[tiktok-token] SUCCESS"));
+      assert.ok(successLog, "Should log success");
+      assert.ok(successLog.includes("token_received=true"), "Should confirm token received");
+    } finally {
+      globalThis.fetch = _origFetch;
+      console.log = _origLog;
+      console.error = _origErr;
+    }
+  });
+
+  it("13. Token exchange diagnostic logging - error path (empty body)", async () => {
+    const _origFetch = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("open.tiktokapis.com/v2/oauth/token")) {
+        return Promise.resolve(new Response("", {
+          status: 200, headers: { "Content-Type": "text/plain" }
+        }));
+      }
+      return _origFetch(url, opts);
+    };
+
+    try {
+      const r1 = await fetch(BASE + "/tiktok/auth", { redirect: "manual" });
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+
+      const r2 = await fetch(
+        BASE + "/tiktok/auth/callback?code=empty_body_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+
+      assert.equal(r2.status, 302);
+      const redirectUrl = r2.headers.get("location");
+      assert.ok(redirectUrl.includes("tiktok_error="), "Should redirect with error");
+
+      const tokenLogs = _logs.filter(l => l.includes("[tiktok-token]"));
+      assert.ok(tokenLogs.length >= 1, "Should have [tiktok-token] diagnostic logs");
+
+      const statusLog = tokenLogs.find(l => l.includes("[tiktok-token] HTTP"));
+      assert.ok(statusLog, "Should log HTTP status");
+
+      const contentTypeLog = tokenLogs.find(l => l.includes("content-type="));
+      assert.ok(contentTypeLog, "Should log content-type");
+      assert.ok(contentTypeLog.includes("text/plain"), "Should show actual content-type");
+
+      const noAccessLog = tokenLogs.find(l => l.includes("No access_token"));
+      assert.ok(noAccessLog, "Should log No access_token in response");
+    } finally {
+      globalThis.fetch = _origFetch;
+      console.log = _origLog;
+      console.error = _origErr;
+    }
+  });
+
+  it("14. Token exchange diagnostic logging - TikTok error envelope", async () => {
+    const _origFetch = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("open.tiktokapis.com/v2/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: { code: "invalid_client", message: "Client authentication failed", log_id: "tt_log_abc123" }
+        }), { status: 400, headers: { "Content-Type": "application/json" } }));
+      }
+      return _origFetch(url, opts);
+    };
+
+    try {
+      const r1 = await fetch(BASE + "/tiktok/auth", { redirect: "manual" });
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+
+      const r2 = await fetch(
+        BASE + "/tiktok/auth/callback?code=error_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+
+      assert.equal(r2.status, 302);
+      const redirectUrl = r2.headers.get("location");
+      assert.ok(redirectUrl.includes("tiktok_error="), "Should redirect with error");
+
+      const tokenLogs = _logs.filter(l => l.includes("[tiktok-token]"));
+      assert.ok(tokenLogs.length >= 1, "Should have [tiktok-token] diagnostic logs");
+
+      const errorLog = tokenLogs.find(l => l.includes("[tiktok-token] TikTok error:"));
+      assert.ok(errorLog, "Should log TikTok error");
+      assert.ok(errorLog.includes("invalid_client"), "Should include error code");
+      assert.ok(errorLog.includes("Client authentication failed"), "Should include error message");
+      assert.ok(errorLog.includes("tt_log_abc123"), "Should include log_id");
+      assert.ok(!errorLog.includes("tik_tok_test_client_secret"), "Must NOT expose client secret");
+    } finally {
+      globalThis.fetch = _origFetch;
+      console.log = _origLog;
+      console.error = _origErr;
+    }
+  });
 });
 
 console.log("\n✅ TikTok tests complete.\n");

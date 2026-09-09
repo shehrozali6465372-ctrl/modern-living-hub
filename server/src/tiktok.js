@@ -249,39 +249,46 @@ export function registerTikTokRoutes(app, opts) {
         redirect_uri: TT_REDIRECT_URI
       });
 
-      console.log("TikTok token exchange: sending request");
+      console.log("TikTok token exchange: sending request to", TIKTOK_TOKEN_URL);
+      console.log("TikTok token exchange: grant_type=authorization_code, code_length=" + (code ? code.length : 0) + ", redirect_uri=" + TT_REDIRECT_URI);
+
       const tokenRes = await fetch(TIKTOK_TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: body.toString()
       });
 
-      console.log("TikTok token exchange status:", tokenRes.status);
-      const rawData = await tokenRes.json().catch(() => ({}));
+      const responseContentType = tokenRes.headers.get("content-type") || "unknown";
+      const responseText = await tokenRes.text().catch(() => "");
+      console.log("[tiktok-token] HTTP " + tokenRes.status + " content-type=" + responseContentType + " body_length=" + responseText.length);
+      // Strip secrets from body preview before logging
+      const _safePreview = responseText.slice(0, 500).replace(/"access_token"\s*:\s*"[^"]*"/g, '"access_token":"[REDACTED]"').replace(/"refresh_token"\s*:\s*"[^"]*"/g, '"refresh_token":"[REDACTED]"');
+      console.log("[tiktok-token] body_preview=" + _safePreview);
+
+      let rawData = {};
+      try { rawData = JSON.parse(responseText); } catch (e) {
+        console.error("[tiktok-token] JSON parse failed:", e.message);
+      }
 
       // TikTok wraps data/error in a top-level { data: {...}, error: {...} } envelope
-      const tkError = rawData.error;
-      const tkData = rawData.data;
+      const tkError = rawData.error || null;
+      const tkData = rawData.data || null;
 
       if (tkError && tkError.code !== "ok") {
         const errMsg = tkError.message || "Token exchange failed";
-        console.error("TikTok token exchange error:", JSON.stringify({
-          code: tkError.code, message: tkError.message, log_id: tkError.log_id
+        console.error("[tiktok-token] TikTok error:", JSON.stringify({
+          code: tkError.code, message: tkError.message, log_id: tkError.log_id || null,
+          error: tkError.error || null, error_description: tkError.error_description || null
         }));
         return res.redirect(`${FRONTEND_URL}/tiktok.html?tiktok_error=${encodeURIComponent("Could not exchange code: " + errMsg)}`);
       }
 
       if (!tkData || !tkData.access_token) {
+        console.error("[tiktok-token] No access_token in response. tkData=" + JSON.stringify(tkData) + " tkError=" + JSON.stringify(tkError));
         return res.redirect(`${FRONTEND_URL}/tiktok.html?tiktok_error=No access token returned by TikTok.`);
       }
 
-      console.log("TikTok token exchange success:", JSON.stringify({
-        status: tokenRes.status,
-        token_received: Boolean(tkData.access_token),
-        refresh_token_received: Boolean(tkData.refresh_token),
-        open_id: tkData.open_id || null,
-        scope: tkData.scope || null
-      }));
+      console.log("[tiktok-token] SUCCESS: token_received=true, refresh_token_received=" + Boolean(tkData.refresh_token) + ", scope=" + (tkData.scope || "none") + ", open_id=" + (tkData.open_id || "none"));
 
       const connectedAt = new Date().toISOString();
       const tiktokData = {
