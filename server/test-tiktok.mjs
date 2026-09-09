@@ -764,6 +764,33 @@ it("18. Post init requires explicit privacy selection", async () => {
     }
   });
 
+  it("21. TikTok posting UX shows required declaration and defaults", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = new URL("../tiktok.html", import.meta.url).pathname;
+    const jsPath = new URL("../assets/js/tiktok.js", import.meta.url).pathname;
+    const html = readFileSync(path, "utf8");
+    const js = readFileSync(jsPath, "utf8");
+
+    // Exact required declaration before the Post button
+    assert.ok(html.includes("By posting, you agree to TikTok's Music Usage Confirmation."),
+      "Default Music Usage Confirmation declaration must be shown");
+    const declIdx = html.indexOf("By posting, you agree to TikTok's Music Usage Confirmation.");
+    const btnIdx = html.indexOf('id="post-btn"');
+    assert.ok(declIdx !== -1 && btnIdx !== -1 && declIdx < btnIdx,
+      "Declaration must appear before the Post button");
+
+    // Branded content/paid partnership variant
+    assert.ok(js.includes("By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation."),
+      "Branded Content declaration variant must exist in frontend JS");
+    assert.ok(js.includes("brandToggle.addEventListener('change', updatePostDeclaration)"),
+      "Declaration must update when paid partnership toggle changes");
+
+    // Duet / Comment / Stitch disabled by default (no checked attribute)
+    assert.ok(!/<input type="checkbox" id="disable-duet" checked/.test(html), "disable-duet must not default to checked");
+    assert.ok(!/<input type="checkbox" id="disable-comment" checked/.test(html), "disable-comment must not default to checked");
+    assert.ok(!/<input type="checkbox" id="disable-stitch" checked/.test(html), "disable-stitch must not default to checked");
+  });
+
 });
 
 console.log("\n✅ TikTok tests complete.\n");

@@ -236,6 +236,23 @@
         });
     }
 
+    // ─── TikTok declaration (Content Sharing Guidelines) ───
+    var confirmNote = document.getElementById('confirm-note');
+    var brandToggle = document.getElementById('brand-content-toggle');
+
+    function updatePostDeclaration() {
+        if (!confirmNote) return;
+        var isPaidPartnership = brandToggle ? brandToggle.checked : false;
+        confirmNote.textContent = isPaidPartnership
+            ? "By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation."
+            : "By posting, you agree to TikTok's Music Usage Confirmation.";
+    }
+
+    if (brandToggle) {
+        brandToggle.addEventListener('change', updatePostDeclaration);
+    }
+    updatePostDeclaration();
+
     // ─── Post to TikTok ───
     if (postForm) {
         postForm.addEventListener('submit', async function (e) {
