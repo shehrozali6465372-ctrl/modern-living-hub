@@ -51,7 +51,18 @@ await import("./src/server.js");
 await new Promise(r => setTimeout(r, 500));
 
 // Mock TikTok API responses
+// TikTok v2 flat response format (tokens at top level, not inside data)
 const MOCK_TIKTOK_TOKEN = {
+  access_token: "mock_tiktok_access_token",
+  refresh_token: "mock_tiktok_refresh_token",
+  open_id: "mock_tiktok_open_id_123",
+  scope: "video.publish",
+  expires_in: 86400,
+  token_type: "bearer"
+};
+
+// Legacy envelope format for backward-compatibility testing
+const MOCK_TIKTOK_TOKEN_ENVELOPE = {
   data: {
     access_token: "mock_tiktok_access_token",
     refresh_token: "mock_tiktok_refresh_token",
@@ -544,6 +555,112 @@ describe("TikTok Integration", () => {
       assert.ok(oauthErrLog, "Should log raw OAuth error");
       assert.ok(oauthErrLog.includes("invalid_client"), "Should include error code");
       assert.ok(!oauthErrLog.includes("tik_tok_test_client_secret"), "Must NOT expose client secret");
+    } finally {
+      globalThis.fetch = _origFetch;
+      console.log = _origLog;
+      console.error = _origErr;
+    }
+  });
+
+it("16. Flat v2 token response parsed correctly", async () => {
+    const _origFetch = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("open.tiktokapis.com/v2/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          access_token: "flat_v2_access_token_abc123",
+          refresh_token: "flat_v2_refresh_token_xyz789",
+          open_id: "flat_v2_open_id_456",
+          scope: "video.publish",
+          expires_in: 86400,
+          refresh_expires_in: 31536000,
+          token_type: "bearer"
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      return _origFetch(url, opts);
+    };
+
+    try {
+      const r1 = await fetch(BASE + "/tiktok/auth", { redirect: "manual" });
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+
+      const r2 = await fetch(
+        BASE + "/tiktok/auth/callback?code=flat_v2_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+
+      assert.equal(r2.status, 302);
+      const redirectUrl = r2.headers.get("location");
+      assert.ok(redirectUrl.includes("tiktok_connected=1"), "Should redirect with connected=1");
+      assert.ok(redirectUrl.includes("tt_handoff="), "Should have handoff code");
+
+      const tokenLogs = _logs.filter(l => l.includes("[tiktok-token]"));
+      const successLog = tokenLogs.find(l => l.includes("[tiktok-token] SUCCESS"));
+      assert.ok(successLog, "Should log success");
+      assert.ok(successLog.includes("token_received=true"), "Should confirm token received");
+      assert.ok(successLog.includes("scope=video.publish"), "Should show scope");
+      assert.ok(successLog.includes("open_id=flat_v2_open_id_456"), "Should show open_id");
+
+      const allLogs = _logs.join(" ");
+      assert.ok(!allLogs.includes("flat_v2_access_token_abc123"), "Must NOT log access_token");
+      assert.ok(!allLogs.includes("flat_v2_refresh_token_xyz789"), "Must NOT log refresh_token");
+    } finally {
+      globalThis.fetch = _origFetch;
+      console.log = _origLog;
+      console.error = _origErr;
+    }
+  });
+
+  it("17. Envelope token response still works (backward compat)", async () => {
+    const _origFetch = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("open.tiktokapis.com/v2/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify(MOCK_TIKTOK_TOKEN_ENVELOPE), {
+          status: 200, headers: { "Content-Type": "application/json" }
+        }));
+      }
+      return _origFetch(url, opts);
+    };
+
+    try {
+      const r1 = await fetch(BASE + "/tiktok/auth", { redirect: "manual" });
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+
+      const r2 = await fetch(
+        BASE + "/tiktok/auth/callback?code=envelope_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+
+      assert.equal(r2.status, 302);
+      const redirectUrl = r2.headers.get("location");
+      assert.ok(redirectUrl.includes("tiktok_connected=1"), "Should redirect with connected=1");
+      assert.ok(redirectUrl.includes("tt_handoff="), "Should have handoff code");
+
+      const tokenLogs = _logs.filter(l => l.includes("[tiktok-token]"));
+      const successLog = tokenLogs.find(l => l.includes("[tiktok-token] SUCCESS"));
+      assert.ok(successLog, "Should log success with envelope format");
+      assert.ok(successLog.includes("token_received=true"), "Should confirm token received");
+
+      const allLogs = _logs.join(" ");
+      assert.ok(!allLogs.includes("mock_tiktok_access_token"), "Must NOT log access_token");
+      assert.ok(!allLogs.includes("mock_tiktok_refresh_token"), "Must NOT log refresh_token");
     } finally {
       globalThis.fetch = _origFetch;
       console.log = _origLog;

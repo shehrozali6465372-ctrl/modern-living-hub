@@ -271,12 +271,11 @@ export function registerTikTokRoutes(app, opts) {
         console.error("[tiktok-token] JSON parse failed:", e.message);
       }
 
-      // TikTok wraps data/error in a top-level { data: {...}, error: {...} } envelope
-      const tkError = rawData.error || null;
-      const tkData = rawData.data || null;
+      // TikTok v2 returns tokens at the top level: {access_token, refresh_token, open_id, scope, ...}
+      // Legacy envelope format: {data: {access_token, ...}, error: {code, message, ...}}
+      // Raw OAuth error: {error: "invalid_client", error_description: "..."}
 
       // Handle raw OAuth error response first (e.g. {"error":"invalid_client","error_description":"..."})
-      // TikTok returns this format when client_key/client_secret is wrong
       if (rawData.error && typeof rawData.error === "string") {
         const errMsg = rawData.error_description || rawData.error || "Token exchange failed";
         console.error("[tiktok-token] OAuth error:", JSON.stringify({
@@ -286,29 +285,38 @@ export function registerTikTokRoutes(app, opts) {
       }
 
       // Handle TikTok envelope error (e.g. {"error":{"code":"ok","message":"..."},"data":{...}})
-      if (tkError && tkError.code !== "ok") {
-        const errMsg = tkError.message || "Token exchange failed";
+      if (rawData.error && typeof rawData.error === "object" && rawData.error.code !== "ok") {
+        const errMsg = rawData.error.message || "Token exchange failed";
         console.error("[tiktok-token] TikTok error:", JSON.stringify({
-          code: tkError.code, message: tkError.message, log_id: tkError.log_id || null
+          code: rawData.error.code, message: rawData.error.message, log_id: rawData.error.log_id || null
         }));
         return res.redirect(`${FRONTEND_URL}/tiktok.html?tiktok_error=${encodeURIComponent("Could not exchange code: " + errMsg)}`);
       }
 
-      if (!tkData || !tkData.access_token) {
+      // Read tokens: try top-level (v2 flat) first, then envelope data
+      const accessToken = rawData.access_token || (rawData.data && rawData.data.access_token) || null;
+
+      if (!accessToken) {
         console.error("[tiktok-token] No access_token. response_body=" + responseText.slice(0, 300));
         return res.redirect(`${FRONTEND_URL}/tiktok.html?tiktok_error=No access token returned by TikTok.`);
       }
 
-      console.log("[tiktok-token] SUCCESS: token_received=true, refresh_token_received=" + Boolean(tkData.refresh_token) + ", scope=" + (tkData.scope || "none") + ", open_id=" + (tkData.open_id || "none"));
+      const refreshToken = rawData.refresh_token || (rawData.data && rawData.data.refresh_token) || null;
+      const openId = rawData.open_id || (rawData.data && rawData.data.open_id) || null;
+      const scope = rawData.scope || (rawData.data && rawData.data.scope) || TIKTOK_SCOPES.join(",");
+      const tokenType = rawData.token_type || (rawData.data && rawData.data.token_type) || "bearer";
+      const expiresIn = rawData.expires_in || (rawData.data && rawData.data.expires_in) || null;
+
+      console.log("[tiktok-token] SUCCESS: token_received=true, refresh_token_received=" + Boolean(refreshToken) + ", scope=" + scope + ", open_id=" + (openId || "none"));
 
       const connectedAt = new Date().toISOString();
       const tiktokData = {
-        access_token: tkData.access_token,
-        refresh_token: tkData.refresh_token || null,
-        open_id: tkData.open_id || null,
-        scope: tkData.scope || TIKTOK_SCOPES.join(","),
-        token_type: tkData.token_type || "bearer",
-        expires_in: tkData.expires_in || null,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        open_id: openId,
+        scope: scope,
+        token_type: tokenType,
+        expires_in: expiresIn,
         connected_at: connectedAt
       };
 
