@@ -518,4 +518,16 @@ export function registerTikTokRoutes(app, opts) {
   });
 
   console.log("TikTok routes registered", ttConfigured ? "(configured)" : "(not configured — set TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI)");
+
+  // --- Safe diagnostic fingerprints (no secrets exposed) ---
+  const _k = process.env.TIKTOK_CLIENT_KEY || null;
+  const _r = process.env.TIKTOK_REDIRECT_URI || null;
+  function _fp(s) { return s ? crypto.createHash("sha256").update(s).digest("hex") : "NOT SET"; }
+  console.log("[tiktok-diag] TIKTOK_CLIENT_KEY length=" + (_k ? _k.length : 0) + " sha256=" + _fp(_k));
+  console.log("[tiktok-diag] TIKTOK_REDIRECT_URI value=" + (_r || "NOT SET") + " sha256=" + _fp(_r));
+  if (_k) {
+    const _p = new URLSearchParams({ client_key: _k, response_type: "code", redirect_uri: _r || "", scope: "video.publish", state: "diag" });
+    const _uk = new URL("https://www.tiktok.com/v2/auth/authorize/?" + _p.toString()).searchParams.get("client_key");
+    console.log("[tiktok-diag] OAuth URL client_key sha256=" + _fp(_uk) + " match_env=" + (_fp(_uk) === _fp(_k)));
+  }
 }
