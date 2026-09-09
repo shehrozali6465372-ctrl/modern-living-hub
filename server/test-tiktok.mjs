@@ -252,7 +252,8 @@ describe("TikTok Integration", () => {
           privacy_level: "PUBLIC_TO_EVERYONE",
           disable_duet: false,
           disable_comment: false,
-          disable_stitch: true
+          disable_stitch: true,
+          brand_content_toggle: false
         })
       });
       assert.equal(init.status, 200);
@@ -665,6 +666,101 @@ it("16. Flat v2 token response parsed correctly", async () => {
       globalThis.fetch = _origFetch;
       console.log = _origLog;
       console.error = _origErr;
+    }
+  });
+
+it("18. Post init requires explicit privacy selection", async () => {
+    const _orig = globalThis.fetch;
+    mockTikTokApi();
+    try {
+      // Test 11 (Disconnect) invalidated the earlier session token;
+      // establish a fresh authenticated session for the post-init tests.
+      TS.sessionToken = await completeTikTokOAuth();
+      const r = await fetch(BASE + "/api/tiktok/post/init", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + TS.sessionToken
+        },
+        body: JSON.stringify({
+          title: "No privacy selected",
+          disable_duet: false,
+          disable_comment: false,
+          disable_stitch: false
+        })
+      });
+      assert.equal(r.status, 400, "Missing privacy_level should be rejected");
+      const data = await r.json();
+      assert.ok(data.error && data.error.includes("privacy"), "Error should mention privacy");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("19. Post init rejects privacy not in TikTok creator options", async () => {
+    const _orig = globalThis.fetch;
+    mockTikTokApi();
+    try {
+      const r = await fetch(BASE + "/api/tiktok/post/init", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + TS.sessionToken
+        },
+        body: JSON.stringify({
+          title: "Invalid privacy",
+          privacy_level: "NOT_A_REAL_OPTION",
+          disable_duet: false,
+          disable_comment: false,
+          disable_stitch: false
+        })
+      });
+      assert.equal(r.status, 400, "Unavailable privacy option should be rejected");
+      const data = await r.json();
+      assert.ok(data.error, "Should return an error message");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("20. Post init sends brand_content_toggle to TikTok video/init", async () => {
+    const _orig = globalThis.fetch;
+    mockTikTokApi();
+    const _mock = globalThis.fetch; // delegate to the mock so all TikTok calls stay mocked
+    let sentInitBody = null;
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("post/publish/video/init")) {
+        sentInitBody = JSON.parse(opts.body);
+      }
+      return _mock(url, opts);
+    };
+    try {
+      const r = await fetch(BASE + "/api/tiktok/post/init", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + TS.sessionToken
+        },
+        body: JSON.stringify({
+          title: "Brand toggle test",
+          privacy_level: "PUBLIC_TO_EVERYONE",
+          disable_duet: true,
+          disable_comment: false,
+          disable_stitch: true,
+          brand_content_toggle: true
+        })
+      });
+      assert.equal(r.status, 200, "Valid privacy + brand toggle should succeed");
+      assert.ok(sentInitBody, "Should have captured video/init payload");
+      assert.ok(sentInitBody.post_info, "Should have post_info object");
+      assert.equal(sentInitBody.post_info.brand_content_toggle, true, "brand_content_toggle should be true");
+      assert.equal(sentInitBody.post_info.disable_duet, true, "disable_duet should map correctly");
+      assert.equal(sentInitBody.post_info.disable_comment, false, "disable_comment should map correctly");
+      assert.equal(sentInitBody.post_info.disable_stitch, true, "disable_stitch should map correctly");
+      assert.equal(sentInitBody.post_info.privacy_level, "PUBLIC_TO_EVERYONE", "privacy_level should match");
+    } finally {
+      globalThis.fetch = _orig;
     }
   });
 

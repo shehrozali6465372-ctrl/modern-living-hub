@@ -167,16 +167,23 @@
             }
 
             // Update privacy options from TikTok
+            // Keep the "Select privacy setting" placeholder; user must choose explicitly.
             if (data.privacy_level_options && data.privacy_level_options.length > 0 && privacySelect) {
                 var currentVal = privacySelect.value;
                 privacySelect.innerHTML = '';
+                var placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.disabled = true;
+                placeholder.selected = true;
+                placeholder.textContent = 'Select privacy setting';
+                privacySelect.appendChild(placeholder);
                 data.privacy_level_options.forEach(function (opt) {
                     var o = document.createElement('option');
                     o.value = opt;
                     o.textContent = opt.replace(/_/g, ' ');
                     privacySelect.appendChild(o);
                 });
-                if (Array.from(privacySelect.options).some(function (o) { return o.value === currentVal; })) {
+                if (currentVal && Array.from(privacySelect.options).some(function (o) { return o.value === currentVal; })) {
                     privacySelect.value = currentVal;
                 }
             }
@@ -237,7 +244,7 @@
 
             var title = document.getElementById('video-title').value.trim();
             var file = videoFile && videoFile.files && videoFile.files[0];
-            var privacy = privacySelect ? privacySelect.value : 'PUBLIC_TO_EVERYONE';
+            var privacy = privacySelect ? privacySelect.value : '';
             var disableDuet = document.getElementById('disable-duet') ? document.getElementById('disable-duet').checked : false;
             var disableComment = document.getElementById('disable-comment') ? document.getElementById('disable-comment').checked : false;
             var disableStitch = document.getElementById('disable-stitch') ? document.getElementById('disable-stitch').checked : false;
@@ -249,6 +256,11 @@
             }
             if (!file) {
                 postResult.textContent = '❌ Please select a video file.';
+                postResult.style.color = 'var(--color-error)';
+                return;
+            }
+            if (!privacy) {
+                postResult.textContent = '❌ Please select a privacy setting.';
                 postResult.style.color = 'var(--color-error)';
                 return;
             }
@@ -267,7 +279,8 @@
                         privacy_level: privacy,
                         disable_duet: disableDuet,
                         disable_comment: disableComment,
-                        disable_stitch: disableStitch
+                        disable_stitch: disableStitch,
+                        brand_content_toggle: document.getElementById('brand-content-toggle') ? document.getElementById('brand-content-toggle').checked : false
                     })
                 });
                 var initData = await initRes.json();

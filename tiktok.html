@@ -86,10 +86,7 @@
                         <div class="form-group">
                             <label for="privacy-level">Privacy Setting</label>
                             <select id="privacy-level" name="privacy_level" required>
-                                <option value="PUBLIC_TO_EVERYONE">Public</option>
-                                <option value="MUTUAL_FOLLOW_FRIENDS">Friends</option>
-                                <option value="FOLLOWER_OF_CREATOR">Followers</option>
-                                <option value="SELF_ONLY">Only Me</option>
+                                <option value="" disabled selected>Select privacy setting</option>
                             </select>
                             <p class="form-hint" style="font-size:0.85rem; color:var(--color-text-light); margin-top:0.25rem;">
                                 TikTok determines which options are available based on your account.
@@ -110,6 +107,14 @@
                             <label>
                                 <input type="checkbox" id="disable-stitch"> Disable stitch
                             </label>
+                        </div>
+                        <div class="form-group form-checkbox">
+                            <label>
+                                <input type="checkbox" id="brand-content-toggle"> This is a paid partnership
+                            </label>
+                            <p class="form-hint" style="font-size:0.85rem; color:var(--color-text-light); margin-top:0.25rem;">
+                                Required by TikTok if the video promotes a third-party business.
+                            </p>
                         </div>
 
                         <div class="form-group">

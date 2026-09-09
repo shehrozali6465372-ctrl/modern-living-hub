@@ -418,23 +418,55 @@ export function registerTikTokRoutes(app, opts) {
     }
   });
 
+  // ─── Helper: fetch creator's privacy level options directly from TikTok ───
+  async function getCreatorPrivacyOptions(token) {
+    try {
+      const r = await fetch(`${TIKTOK_API_BASE}/post/publish/creator_info/query/`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: "{}"
+      });
+      const raw = await r.json().catch(() => ({}));
+      const d = raw.data || {};
+      return Array.isArray(d.privacy_level_options) ? d.privacy_level_options : [];
+    } catch {
+      return [];
+    }
+  }
+
   // ─── Initialize Direct Post ───
   app.post("/api/tiktok/post/init", async (req, res) => {
     const token = getTTUserToken(req);
     if (!token) return res.status(401).json({ error: "Not connected to TikTok." });
 
-    const { title, privacy_level, disable_duet, disable_comment, disable_stitch, video_cover_timestamp_ms, source } = req.body;
+    const { title, privacy_level, disable_duet, disable_comment, disable_stitch, video_cover_timestamp_ms, source, brand_content_toggle } = req.body;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: "Caption/title is required." });
     }
 
+    // Privacy setting is REQUIRED and must be explicitly chosen by the user.
+    if (!privacy_level || typeof privacy_level !== "string") {
+      return res.status(400).json({ error: "Privacy setting is required. Please select a privacy setting returned by TikTok." });
+    }
+
+    // Validate the selected privacy value against the options returned by TikTok.
+    const allowedPrivacy = await getCreatorPrivacyOptions(token);
+    if (allowedPrivacy.length > 0 && !allowedPrivacy.includes(privacy_level)) {
+      console.error("TikTok post init: privacy_level not in creator options:", JSON.stringify({ provided: privacy_level, allowed: allowedPrivacy }));
+      return res.status(400).json({ error: "Selected privacy setting is not available for this account. Please choose one of the options shown." });
+    }
+
     const postInfo = {
       title: title.trim(),
-      privacy_level: privacy_level || "PUBLIC_TO_EVERYONE",
+      privacy_level: privacy_level,
       disable_duet: Boolean(disable_duet),
       disable_comment: Boolean(disable_comment),
       disable_stitch: Boolean(disable_stitch),
+      brand_content_toggle: Boolean(brand_content_toggle),
       video_cover_timestamp_ms: video_cover_timestamp_ms || 0,
       source_info: { source: source || "FILE_UPLOAD" },
       post_mode: "DIRECT_POST"
