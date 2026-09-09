@@ -500,6 +500,57 @@ describe("TikTok Integration", () => {
       console.error = _origErr;
     }
   });
+
+  it("15. Token exchange handles raw OAuth error (invalid_client)", async () => {
+    const _origFetch = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+
+    // Mock token exchange to return raw OAuth error (not TikTok envelope)
+    globalThis.fetch = function (url, opts) {
+      const urlStr = typeof url === "string" ? url : String(url);
+      if (urlStr.includes("open.tiktokapis.com/v2/oauth/token")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: "invalid_client",
+          error_description: "Client key or secret is incorrect."
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      return _origFetch(url, opts);
+    };
+
+    try {
+      const r1 = await fetch(BASE + "/tiktok/auth", { redirect: "manual" });
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+
+      const r2 = await fetch(
+        BASE + "/tiktok/auth/callback?code=invalid_client_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+
+      assert.equal(r2.status, 302);
+      const redirectUrl = r2.headers.get("location");
+      assert.ok(redirectUrl.includes("tiktok_error="), "Should redirect with error");
+      assert.ok(redirectUrl.includes("Client%20key%20or%20secret"), "Error message should mention client key/secret");
+
+      const tokenLogs = _logs.filter(l => l.includes("[tiktok-token]"));
+      assert.ok(tokenLogs.length >= 1, "Should have [tiktok-token] diagnostic logs");
+
+      const oauthErrLog = tokenLogs.find(l => l.includes("[tiktok-token] OAuth error:"));
+      assert.ok(oauthErrLog, "Should log raw OAuth error");
+      assert.ok(oauthErrLog.includes("invalid_client"), "Should include error code");
+      assert.ok(!oauthErrLog.includes("tik_tok_test_client_secret"), "Must NOT expose client secret");
+    } finally {
+      globalThis.fetch = _origFetch;
+      console.log = _origLog;
+      console.error = _origErr;
+    }
+  });
+
 });
 
 console.log("\n✅ TikTok tests complete.\n");

@@ -22,9 +22,9 @@ export function registerTikTokRoutes(app, opts) {
   // opts: { SESSION_SECRET, FRONTEND_URL, isProduction }
   const { SESSION_SECRET, FRONTEND_URL, isProduction } = opts;
 
-  const TT_CLIENT_KEY = process.env.TIKTOK_CLIENT_KEY || null;
-  const TT_CLIENT_SECRET = process.env.TIKTOK_CLIENT_SECRET || null;
-  const TT_REDIRECT_URI = process.env.TIKTOK_REDIRECT_URI || null;
+  const TT_CLIENT_KEY = (process.env.TIKTOK_CLIENT_KEY || "").trim() || null;
+  const TT_CLIENT_SECRET = (process.env.TIKTOK_CLIENT_SECRET || "").trim() || null;
+  const TT_REDIRECT_URI = (process.env.TIKTOK_REDIRECT_URI || "").trim() || null;
 
   const ttConfigured = Boolean(TT_CLIENT_KEY && TT_CLIENT_SECRET && TT_REDIRECT_URI);
 
@@ -250,6 +250,7 @@ export function registerTikTokRoutes(app, opts) {
       });
 
       console.log("TikTok token exchange: sending request to", TIKTOK_TOKEN_URL);
+      console.log("[tiktok-token] request: grant_type=authorization_code, code_length=" + (code ? code.length : 0) + ", redirect_uri=" + TT_REDIRECT_URI + ", client_key_length=" + (TT_CLIENT_KEY ? TT_CLIENT_KEY.length : 0));
       console.log("TikTok token exchange: grant_type=authorization_code, code_length=" + (code ? code.length : 0) + ", redirect_uri=" + TT_REDIRECT_URI);
 
       const tokenRes = await fetch(TIKTOK_TOKEN_URL, {
@@ -274,17 +275,27 @@ export function registerTikTokRoutes(app, opts) {
       const tkError = rawData.error || null;
       const tkData = rawData.data || null;
 
+      // Handle raw OAuth error response first (e.g. {"error":"invalid_client","error_description":"..."})
+      // TikTok returns this format when client_key/client_secret is wrong
+      if (rawData.error && typeof rawData.error === "string") {
+        const errMsg = rawData.error_description || rawData.error || "Token exchange failed";
+        console.error("[tiktok-token] OAuth error:", JSON.stringify({
+          error: rawData.error, error_description: rawData.error_description || null
+        }));
+        return res.redirect(`${FRONTEND_URL}/tiktok.html?tiktok_error=${encodeURIComponent("Could not exchange code: " + errMsg)}`);
+      }
+
+      // Handle TikTok envelope error (e.g. {"error":{"code":"ok","message":"..."},"data":{...}})
       if (tkError && tkError.code !== "ok") {
         const errMsg = tkError.message || "Token exchange failed";
         console.error("[tiktok-token] TikTok error:", JSON.stringify({
-          code: tkError.code, message: tkError.message, log_id: tkError.log_id || null,
-          error: tkError.error || null, error_description: tkError.error_description || null
+          code: tkError.code, message: tkError.message, log_id: tkError.log_id || null
         }));
         return res.redirect(`${FRONTEND_URL}/tiktok.html?tiktok_error=${encodeURIComponent("Could not exchange code: " + errMsg)}`);
       }
 
       if (!tkData || !tkData.access_token) {
-        console.error("[tiktok-token] No access_token in response. tkData=" + JSON.stringify(tkData) + " tkError=" + JSON.stringify(tkError));
+        console.error("[tiktok-token] No access_token. response_body=" + responseText.slice(0, 300));
         return res.redirect(`${FRONTEND_URL}/tiktok.html?tiktok_error=No access token returned by TikTok.`);
       }
 
