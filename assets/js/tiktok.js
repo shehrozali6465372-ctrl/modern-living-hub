@@ -297,7 +297,8 @@
                         disable_duet: disableDuet,
                         disable_comment: disableComment,
                         disable_stitch: disableStitch,
-                        brand_content_toggle: document.getElementById('brand-content-toggle') ? document.getElementById('brand-content-toggle').checked : false
+                        brand_content_toggle: document.getElementById('brand-content-toggle') ? document.getElementById('brand-content-toggle').checked : false,
+                        video_size: file.size
                     })
                 });
                 var initData = await initRes.json();
@@ -325,7 +326,7 @@
                     method: 'POST',
                     headers: authHeaders({ 'Content-Type': 'application/json' }),
                     credentials: 'include',
-                    body: JSON.stringify({ upload_url: initData.upload_url, video_data: videoBase64 })
+                    body: JSON.stringify({ upload_url: initData.upload_url, video_data: videoBase64, video_size: file.size })
                 });
                 var uploadData = await uploadRes.json();
 

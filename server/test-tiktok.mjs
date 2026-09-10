@@ -107,6 +107,9 @@ function mockTikTokApi(mockHandlers) {
 
     // Post init
     if (urlStr.includes("post/publish/video/init")) {
+      let body = null;
+      try { body = JSON.parse(opts.body); } catch {}
+      if (mockHandlers && mockHandlers.initRequests && body) mockHandlers.initRequests.push(body);
       return Promise.resolve(new Response(JSON.stringify({
         data: { publish_id: "tt_publish_12345", upload_url: "https://upload.tiktokapis.com/v2/post/publish/upload/12345" }
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -114,7 +117,15 @@ function mockTikTokApi(mockHandlers) {
 
     // Post upload (PUT to TikTok upload URL)
     if (urlStr.includes("upload.tiktokapis.com")) {
-      return Promise.resolve(new Response(null, { status: 204 }));
+      const headers = (opts && opts.headers) || {};
+      const cr = headers["Content-Range"] || headers["content-range"] || "";
+      const m = /bytes (\d+)-(\d+)\/(\d+)/.exec(cr);
+      const isFinal = m ? Number(m[2]) === Number(m[3]) - 1 : true;
+      const bodyBytes = opts && opts.body ? Buffer.byteLength(opts.body) : 0;
+      if (mockHandlers && mockHandlers.uploads) {
+        mockHandlers.uploads.push({ headers: Object.assign({}, headers), bodyBytes, status: isFinal ? 201 : 206 });
+      }
+      return Promise.resolve(new Response(null, { status: isFinal ? 201 : 206 }));
     }
 
     // Post status
@@ -253,7 +264,8 @@ describe("TikTok Integration", () => {
           disable_duet: false,
           disable_comment: false,
           disable_stitch: true,
-          brand_content_toggle: false
+          brand_content_toggle: false,
+          video_size: 16
         })
       });
       assert.equal(init.status, 200);
@@ -271,7 +283,8 @@ describe("TikTok Integration", () => {
         },
         body: JSON.stringify({
           upload_url: initData.upload_url,
-          video_data: Buffer.from("fake-video-bytes").toString("base64")
+          video_data: Buffer.from("fake-video-bytes").toString("base64"),
+          video_size: 16
         })
       });
       assert.equal(upload.status, 200);
@@ -748,7 +761,8 @@ it("18. Post init requires explicit privacy selection", async () => {
           disable_duet: true,
           disable_comment: false,
           disable_stitch: true,
-          brand_content_toggle: true
+          brand_content_toggle: true,
+          video_size: 16
         })
       });
       assert.equal(r.status, 200, "Valid privacy + brand toggle should succeed");
@@ -789,6 +803,116 @@ it("18. Post init requires explicit privacy selection", async () => {
     assert.ok(!/<input type="checkbox" id="disable-duet" checked/.test(html), "disable-duet must not default to checked");
     assert.ok(!/<input type="checkbox" id="disable-comment" checked/.test(html), "disable-comment must not default to checked");
     assert.ok(!/<input type="checkbox" id="disable-stitch" checked/.test(html), "disable-stitch must not default to checked");
+  });
+
+  it("22. FILE_UPLOAD init sends exact source_info for sub-5MB file", async () => {
+    const _orig = globalThis.fetch;
+    const initRequests = [];
+    mockTikTokApi({ initRequests });
+    try {
+      const r = await fetch(BASE + "/api/tiktok/post/init", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + TS.sessionToken
+        },
+        body: JSON.stringify({
+          title: "Sub-5MB video",
+          privacy_level: "PUBLIC_TO_EVERYONE",
+          disable_duet: false,
+          disable_comment: false,
+          disable_stitch: false,
+          brand_content_toggle: false,
+          video_size: 4194304 // 4 MB
+        })
+      });
+      assert.equal(r.status, 200, "Init should succeed for sub-5MB file");
+      assert.equal(initRequests.length, 1, "video/init should be called once");
+      const body = initRequests[0];
+      assert.ok(body.post_info, "post_info must be present");
+      assert.ok(body.source_info, "source_info must be a top-level sibling of post_info");
+      assert.equal(body.post_info.source_info, undefined, "source_info must NOT be nested inside post_info");
+      assert.equal(body.post_info.post_mode, undefined, "post_mode is not part of current Direct Post request");
+      assert.equal(body.source_info.source, "FILE_UPLOAD", "must use FILE_UPLOAD");
+      assert.equal(body.source_info.video_size, 4194304, "exact file size in bytes");
+      assert.equal(body.source_info.chunk_size, 4194304, "whole upload: chunk_size = video_size");
+      assert.equal(body.source_info.total_chunk_count, 1, "whole upload: single chunk");
+      const data = await r.json();
+      assert.equal(data.success, true);
+      assert.ok(data.publish_id && data.upload_url, "publish_id and upload_url returned");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("23. Upload sends required PUT headers and whole-file body", async () => {
+    const _orig = globalThis.fetch;
+    const uploads = [];
+    mockTikTokApi({ uploads });
+    try {
+      const video = Buffer.alloc(1024 * 1024, 0xab); // 1 MB < 5 MB
+      const upload = await fetch(BASE + "/api/tiktok/post/upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + TS.sessionToken
+        },
+        body: JSON.stringify({
+          upload_url: "https://upload.tiktokapis.com/v2/post/publish/upload/12345",
+          video_data: video.toString("base64"),
+          video_size: video.length
+        })
+      });
+      assert.equal(upload.status, 200, "Backend upload should succeed");
+      assert.equal(uploads.length, 1, "Sub-5MB file must upload as exactly one chunk");
+      const put = uploads[0];
+      assert.equal(put.status, 201, "Final chunk should return 201 from TikTok");
+      assert.equal(put.headers["Content-Type"], "video/mp4", "Content-Type header required");
+      assert.equal(put.headers["Content-Length"], String(video.length), "Content-Length header must match chunk bytes");
+      assert.equal(put.headers["Content-Range"], "bytes 0-" + (video.length - 1) + "/" + video.length, "Content-Range header required");
+      assert.equal(put.bodyBytes, video.length, "Binary chunk byte count must match");
+
+      const uploadData = await upload.json();
+      assert.equal(uploadData.success, true);
+      assert.ok(!JSON.stringify(uploadData).includes("mock_tiktok_access_token"), "NO token in response");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("24. Large file init computes valid multi-chunk source_info", async () => {
+    const _orig = globalThis.fetch;
+    const initRequests = [];
+    mockTikTokApi({ initRequests });
+    try {
+      const r = await fetch(BASE + "/api/tiktok/post/init", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + TS.sessionToken
+        },
+        body: JSON.stringify({
+          title: "Large video",
+          privacy_level: "PUBLIC_TO_EVERYONE",
+          disable_duet: false,
+          disable_comment: false,
+          disable_stitch: false,
+          brand_content_toggle: false,
+          video_size: 50000123 // > 5 MB → multi-chunk (nominal 20 MB chunks)
+        })
+      });
+      assert.equal(r.status, 200);
+      const info = initRequests[0].source_info;
+      assert.ok(info, "source_info present");
+      assert.equal(info.source, "FILE_UPLOAD");
+      assert.equal(info.video_size, 50000123);
+      assert.equal(info.chunk_size, 20 * 1024 * 1024, "nominal chunk size 20 MB");
+      assert.equal(info.total_chunk_count, 3, "ceil(50000123 / 20971520) = 3 chunks");
+      assert.ok(info.total_chunk_count <= 1000, "within TikTok 1000-chunk limit");
+      assert.equal(Math.ceil(info.video_size / info.chunk_size), info.total_chunk_count);
+    } finally {
+      globalThis.fetch = _orig;
+    }
   });
 
 });

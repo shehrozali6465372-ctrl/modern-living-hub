@@ -71,7 +71,7 @@ const REQUIRED_SCOPES = SCOPES.split(",");
 
 // ─── Middleware ───
 app.set("trust proxy", 1);
-app.use(express.json());
+app.use(express.json({ limit: "100mb" })); // raised for TikTok Direct Post base64 video uploads
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser(SESSION_SECRET));
 

@@ -437,12 +437,50 @@ export function registerTikTokRoutes(app, opts) {
     }
   }
 
+  // ─── Direct Post source_info (TikTok Media Transfer Guide) ───
+  // https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide/
+  // Videos under 5 MB are uploaded as a whole: chunk_size = video_size, total_chunk_count = 1.
+  // Larger videos use chunks (>5 MB each, trailing bytes merged into the last chunk, max 1000 chunks).
+  const MIN_WHOLE_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
+  const DEFAULT_CHUNK_BYTES = 20 * 1024 * 1024;   // 20 MB nominal chunk size
+  const MAX_CHUNKS = 1000;
+
+  function computeDirectPostSourceInfo(videoSize) {
+    const size = Number(videoSize);
+    if (!Number.isFinite(size) || size <= 0) return null;
+
+    if (size < MIN_WHOLE_UPLOAD_BYTES) {
+      // Whole upload: single chunk matching the entire file size.
+      return { chunk_size: size, total_chunk_count: 1 };
+    }
+
+    let chunkSize = DEFAULT_CHUNK_BYTES;
+    let totalChunkCount = Math.ceil(size / chunkSize);
+    if (totalChunkCount > MAX_CHUNKS) {
+      chunkSize = Math.ceil(size / MAX_CHUNKS);
+      totalChunkCount = MAX_CHUNKS;
+    }
+    if (totalChunkCount === 1) {
+      // File larger than 5 MB but smaller than chunk size: still one chunk.
+      chunkSize = size;
+      return { chunk_size: chunkSize, total_chunk_count: 1 };
+    }
+
+    // Merge a small trailing remainder into the last full chunk (per the guide).
+    const fullChunks = Math.floor(size / chunkSize);
+    const remainder = size % chunkSize;
+    if (remainder > 0 && remainder < MIN_WHOLE_UPLOAD_BYTES) {
+      totalChunkCount = Math.max(1, fullChunks);
+    }
+    return { chunk_size: chunkSize, total_chunk_count: totalChunkCount };
+  }
+
   // ─── Initialize Direct Post ───
   app.post("/api/tiktok/post/init", async (req, res) => {
     const token = getTTUserToken(req);
     if (!token) return res.status(401).json({ error: "Not connected to TikTok." });
 
-    const { title, privacy_level, disable_duet, disable_comment, disable_stitch, video_cover_timestamp_ms, source, brand_content_toggle } = req.body;
+    const { title, privacy_level, disable_duet, disable_comment, disable_stitch, video_cover_timestamp_ms, video_size, brand_content_toggle } = req.body;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: "Caption/title is required." });
@@ -460,6 +498,12 @@ export function registerTikTokRoutes(app, opts) {
       return res.status(400).json({ error: "Selected privacy setting is not available for this account. Please choose one of the options shown." });
     }
 
+    // FILE_UPLOAD requires the exact file size so TikTok can validate the upload.
+    const sourceInfo = computeDirectPostSourceInfo(video_size);
+    if (!sourceInfo) {
+      return res.status(400).json({ error: "video_size (file size in bytes) is required for FILE_UPLOAD initialization." });
+    }
+
     const postInfo = {
       title: title.trim(),
       privacy_level: privacy_level,
@@ -467,9 +511,7 @@ export function registerTikTokRoutes(app, opts) {
       disable_comment: Boolean(disable_comment),
       disable_stitch: Boolean(disable_stitch),
       brand_content_toggle: Boolean(brand_content_toggle),
-      video_cover_timestamp_ms: video_cover_timestamp_ms || 0,
-      source_info: { source: source || "FILE_UPLOAD" },
-      post_mode: "DIRECT_POST"
+      video_cover_timestamp_ms: video_cover_timestamp_ms || 0
     };
 
     try {
@@ -479,7 +521,11 @@ export function registerTikTokRoutes(app, opts) {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ post_info: postInfo })
+        // source_info is a top-level sibling of post_info per the current TikTok docs.
+        body: JSON.stringify({
+          post_info: postInfo,
+          source_info: { source: "FILE_UPLOAD", video_size: Number(video_size), ...sourceInfo }
+        })
       });
       const raw = await r.json().catch(() => ({}));
 
@@ -504,7 +550,7 @@ export function registerTikTokRoutes(app, opts) {
     }
   });
 
-  // ─── Upload video to TikTok ───
+  // ─── Upload video to TikTok (chunked PUT per Media Transfer Guide) ───
   app.post("/api/tiktok/post/upload", async (req, res) => {
     const token = getTTUserToken(req);
     if (!token) return res.status(401).json({ error: "Not connected to TikTok." });
@@ -516,22 +562,43 @@ export function registerTikTokRoutes(app, opts) {
 
     try {
       const videoBuffer = Buffer.from(video_data, "base64");
-      const r = await fetch(upload_url, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "video/mp4"
-        },
-        body: videoBuffer
-      });
-
-      if (!r.ok) {
-        const errText = await r.text().catch(() => "");
-        console.error("TikTok upload failed:", r.status, errText.slice(0, 200));
-        return res.status(400).json({ error: "TikTok upload failed (HTTP " + r.status + ")." });
+      const totalBytes = videoBuffer.length;
+      const info = computeDirectPostSourceInfo(totalBytes);
+      if (!info) {
+        return res.status(400).json({ error: "Could not determine valid upload chunk settings." });
       }
 
-      console.log("TikTok upload successful");
+      const chunkSize = info.chunk_size;
+      const totalChunks = info.total_chunk_count;
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(totalBytes, start + chunkSize) - 1;
+        const chunk = videoBuffer.subarray(start, end + 1);
+
+        const r = await fetch(upload_url, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "video/mp4",
+            "Content-Length": String(chunk.length),
+            "Content-Range": `bytes ${start}-${end}/${totalBytes}`
+          },
+          body: chunk
+        });
+
+        if (!r.ok) {
+          const errText = await r.text().catch(() => "");
+          console.error("TikTok upload failed:", "chunk", i + 1, "of", totalChunks, "HTTP", r.status, errText.slice(0, 200));
+          return res.status(400).json({ error: "TikTok upload failed (HTTP " + r.status + ")." });
+        }
+
+        // 206 Partial Content = more chunks remain; any other 2xx = upload complete.
+        if (r.status === 206 && i < totalChunks - 1) continue;
+        break;
+      }
+
+      console.log("TikTok upload successful (chunks:", totalChunks + ")");
       res.json({ success: true });
     } catch (err) {
       console.error("TikTok upload error:", err.message);
