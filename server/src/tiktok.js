@@ -16,6 +16,7 @@ import crypto from "node:crypto";
 const TIKTOK_AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/";
 const TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
 const TIKTOK_API_BASE = "https://open.tiktokapis.com/v2";
+const TIKTOK_REVOKE_URL = "https://open.tiktokapis.com/v2/oauth/revoke/";
 const TIKTOK_SCOPES = ["video.publish"];
 
 export function registerTikTokRoutes(app, opts) {
@@ -194,7 +195,9 @@ export function registerTikTokRoutes(app, opts) {
       response_type: "code",
       redirect_uri: TT_REDIRECT_URI,
       scope: TIKTOK_SCOPES.join(","),
-      state
+      state,
+      // Force the authorization page on every reconnect — do not silently auto-authorize
+      disable_auto_auth: "1"
     });
 
     console.log("TikTok OAuth start: state generated (length=" + state.length + ")");
@@ -368,16 +371,73 @@ export function registerTikTokRoutes(app, opts) {
     });
   });
 
+  // ─── TikTok OAuth Revoke (server-side only) ───
+  // https://developers.tiktok.com/doc/login-kit-manage-user-access-tokens-new
+  // POST https://open.tiktokapis.com/v2/oauth/revoke/
+  // Content-Type: application/x-www-form-urlencoded
+  // Body: client_key, client_secret, access_token
+  async function revokeTikTokToken(accessToken) {
+    if (!accessToken) return { ok: false, reason: "no_token" };
+    try {
+      const body = new URLSearchParams({
+        client_key: TT_CLIENT_KEY,
+        client_secret: TT_CLIENT_SECRET,
+        access_token: accessToken
+      }).toString();
+
+      const r = await fetch(TIKTOK_REVOKE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body
+      });
+
+      const raw = await r.json().catch(() => ({}));
+      const errCode = raw?.error?.code || "unknown";
+      const errMsg = raw?.error?.message || "";
+
+      // "ok" = success; "invalid_token" / "token_not_found" = already invalid — both mean clean up locally
+      if (errCode === "ok" || errCode === "invalid_token" || errCode === "token_not_found") {
+        console.log("TikTok revoke: status=" + r.status + " code=" + errCode);
+        return { ok: true, code: errCode };
+      }
+
+      console.error("TikTok revoke failed:", "HTTP", r.status, "code", errCode, "msg", errMsg);
+      return { ok: false, code: errCode, message: errMsg };
+    } catch (err) {
+      console.error("TikTok revoke error:", err.message);
+      return { ok: false, reason: "network_error" };
+    }
+  }
+
   // ─── Disconnect ───
-  app.post("/api/tiktok/disconnect", (req, res) => {
+  app.post("/api/tiktok/disconnect", async (req, res) => {
     const sid = getTTSessionId(req);
+
+    // Retrieve the access token BEFORE any local cleanup, so we can revoke it
+    const tokens = sid ? getTTTokens(sid) : readTTToken(req);
+    const accessToken = tokens?.access_token || null;
+
+    // Attempt to revoke the token on TikTok's side
+    if (accessToken) {
+      const revokeResult = await revokeTikTokToken(accessToken);
+      if (!revokeResult.ok) {
+        // Revoke failed for a real reason — keep connection intact, return error
+        return res.status(502).json({
+          disconnected: false,
+          error: "TikTok token revocation failed: " + (revokeResult.message || revokeResult.reason || "Unknown error")
+        });
+      }
+    }
+
+    // Revoke succeeded or token was already invalid/missing — clean up all local state
     if (sid) deleteTTTokens(sid);
     delete req.session?.tt_oauth_state;
     clearTTToken(res);
     for (const [t, e] of ttSessionTokenStore.entries()) {
       if (e.sessionId === sid) ttSessionTokenStore.delete(t);
     }
-    console.log("TikTok disconnected");
+
+    console.log("TikTok disconnected successfully");
     res.json({ disconnected: true });
   });
 

@@ -135,6 +135,17 @@ function mockTikTokApi(mockHandlers) {
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
     }
 
+    // OAuth revoke
+    if (urlStr.includes("open.tiktokapis.com/v2/oauth/revoke")) {
+      if (mockHandlers && mockHandlers.revoke) {
+        return mockHandlers.revoke(opts);
+      }
+      return Promise.resolve(new Response(JSON.stringify({
+        data: {},
+        error: { code: "ok", message: "" }
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+
     return _orig(url, opts);
   };
 }
@@ -353,22 +364,43 @@ describe("TikTok Integration", () => {
     assert.ok(!cfgText.includes("mock_tiktok_access_token"), "Must not expose access token");
   });
 
-  it("11. Disconnect → all tokens invalidated", async () => {
-    const r1 = await fetch(BASE + "/api/tiktok/disconnect", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + TS.sessionToken
+  it("11. Disconnect → revoke + all tokens invalidated", async () => {
+    const _orig = globalThis.fetch;
+    let revokeCalled = false;
+    mockTikTokApi({
+      revoke: (opts) => {
+        revokeCalled = true;
+        // Verify the revoke request body contains the expected fields (but NOT the actual secret value in logs)
+        const body = opts.body || "";
+        assert.ok(body.includes("client_key"), "Revoke body must contain client_key");
+        assert.ok(body.includes("client_secret"), "Revoke body must contain client_secret");
+        assert.ok(body.includes("access_token"), "Revoke body must contain access_token");
+        return Promise.resolve(new Response(JSON.stringify({
+          data: {}, error: { code: "ok", message: "" }
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
       }
     });
-    assert.equal(r1.status, 200);
-    assert.equal((await r1.json()).disconnected, true);
+    try {
+      const r1 = await fetch(BASE + "/api/tiktok/disconnect", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + TS.sessionToken
+        }
+      });
+      assert.equal(r1.status, 200);
+      const d1 = await r1.json();
+      assert.equal(d1.disconnected, true);
+      assert.ok(revokeCalled, "TikTok revoke API must be called");
 
-    const r2 = await fetch(BASE + "/api/tiktok/status", {
-      headers: { "Authorization": "Bearer " + TS.sessionToken }
-    });
-    const data = await r2.json();
-    assert.equal(data.connected, false, "Should be disconnected");
+      const r2 = await fetch(BASE + "/api/tiktok/status", {
+        headers: { "Authorization": "Bearer " + TS.sessionToken }
+      });
+      const data = await r2.json();
+      assert.equal(data.connected, false, "Should be disconnected");
+    } finally {
+      globalThis.fetch = _orig;
+    }
   });
 
   it("12. Token exchange diagnostic logging - success path", async () => {
@@ -910,6 +942,122 @@ it("18. Post init requires explicit privacy selection", async () => {
       assert.equal(info.total_chunk_count, 3, "ceil(50000123 / 20971520) = 3 chunks");
       assert.ok(info.total_chunk_count <= 1000, "within TikTok 1000-chunk limit");
       assert.equal(Math.ceil(info.video_size / info.chunk_size), info.total_chunk_count);
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("25. Revoke success → local cleanup → disconnected", async () => {
+    const _orig = globalThis.fetch;
+    mockTikTokApi();
+    try {
+      // Re-authenticate to get a fresh session token
+      TS.sessionToken = await completeTikTokOAuth();
+      assert.ok(TS.sessionToken, "Fresh session token obtained");
+
+      // Verify connected before disconnect
+      const pre = await fetch(BASE + "/api/tiktok/status", {
+        headers: { "Authorization": "Bearer " + TS.sessionToken }
+      });
+      assert.equal((await pre.json()).connected, true, "Should be connected before disconnect");
+
+      // Disconnect with revoke succeeding
+      const r = await fetch(BASE + "/api/tiktok/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TS.sessionToken }
+      });
+      assert.equal(r.status, 200);
+      assert.equal((await r.json()).disconnected, true);
+
+      // Verify disconnected
+      const post = await fetch(BASE + "/api/tiktok/status", {
+        headers: { "Authorization": "Bearer " + TS.sessionToken }
+      });
+      assert.equal((await post.json()).connected, false, "Should be disconnected after revoke");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("26. Revoke failure (non-token error) → connection kept", async () => {
+    const _orig = globalThis.fetch;
+    let revokeHit = false;
+    mockTikTokApi({
+      revoke: () => {
+        revokeHit = true;
+        return Promise.resolve(new Response(JSON.stringify({
+          data: {},
+          error: { code: "internal_error", message: "TikTok server error" }
+        }), { status: 500, headers: { "Content-Type": "application/json" } }));
+      }
+    });
+    try {
+      // Re-authenticate
+      TS.sessionToken = await completeTikTokOAuth();
+      assert.ok(TS.sessionToken, "Fresh session token obtained");
+
+      // Disconnect should fail (revoke returned non-token error)
+      const r = await fetch(BASE + "/api/tiktok/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TS.sessionToken }
+      });
+      assert.equal(r.status, 502, "Should return 502 when revoke fails");
+      const body = await r.json();
+      assert.equal(body.disconnected, false, "Should NOT report disconnected");
+      assert.ok(body.error, "Should include error message");
+      assert.ok(revokeHit, "Revoke API should have been called");
+
+      // Connection should still be active
+      const status = await fetch(BASE + "/api/tiktok/status", {
+        headers: { "Authorization": "Bearer " + TS.sessionToken }
+      });
+      assert.equal((await status.json()).connected, true, "Connection should be intact after failed revoke");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("27. Disconnect logs contain no credentials or tokens", async () => {
+    const _orig = globalThis.fetch;
+    const _origLog = console.log;
+    const _origErr = console.error;
+    const logs = [];
+    console.log = (...args) => logs.push(args.join(" "));
+    console.error = (...args) => logs.push(args.join(" "));
+    mockTikTokApi();
+    try {
+      // Re-authenticate
+      TS.sessionToken = await completeTikTokOAuth();
+
+      // Disconnect
+      await fetch(BASE + "/api/tiktok/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TS.sessionToken }
+      });
+
+      const allLogs = logs.join("\n");
+      assert.ok(!allLogs.includes("mock_tiktok_access_token"), "Logs must NOT contain access token");
+      assert.ok(!allLogs.includes("mock_tiktok_refresh_token"), "Logs must NOT contain refresh token");
+      assert.ok(!allLogs.includes("tik_tok_test_client_secret"), "Logs must NOT contain client secret");
+      assert.ok(!allLogs.includes(TS.sessionToken), "Logs must NOT contain session token");
+      assert.ok(!allLogs.includes("Authorization:"), "Logs must NOT contain Authorization header");
+    } finally {
+      console.log = _origLog;
+      console.error = _origErr;
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("28. OAuth URL includes disable_auto_auth=1 for forced re-authorization", async () => {
+    const _orig = globalThis.fetch;
+    try {
+      const r = await fetch(BASE + "/tiktok/auth", { redirect: "manual" });
+      assert.equal(r.status, 302);
+      const loc = r.headers.get("location");
+      const url = new URL(loc);
+      assert.equal(url.searchParams.get("disable_auto_auth"), "1", "OAuth URL must include disable_auto_auth=1");
+      assert.ok(url.searchParams.get("state"), "CSRF state still present");
+      assert.ok(url.searchParams.get("client_key"), "client_key still present");
     } finally {
       globalThis.fetch = _orig;
     }

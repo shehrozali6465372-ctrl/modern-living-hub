@@ -29,6 +29,7 @@
 
     // ─── DOM references ───
     var connectBtn = document.getElementById('connect-tiktok-btn');
+    var statusBanner = document.getElementById('tiktok-status');
     var connectedState = document.getElementById('connected-state');
     var disconnectedState = document.getElementById('disconnected-state');
     var creatorInfo = document.getElementById('creator-info');
@@ -57,6 +58,7 @@
             connectBtn.style.pointerEvents = 'none';
             connectBtn.style.opacity = '0.6';
         }
+        if (statusBanner) statusBanner.style.display = 'block';
         if (connectedState) connectedState.style.display = 'block';
         if (disconnectedState) disconnectedState.style.display = 'none';
         loadCreatorInfo();
@@ -69,6 +71,7 @@
             connectBtn.style.pointerEvents = isBackendConfigured() ? '' : 'none';
             connectBtn.style.opacity = isBackendConfigured() ? '' : '0.5';
         }
+        if (statusBanner) statusBanner.style.display = 'none';
         if (connectedState) connectedState.style.display = 'none';
         if (disconnectedState) disconnectedState.style.display = 'block';
         if (creatorInfo) creatorInfo.innerHTML = '<p>Not connected.</p>';
