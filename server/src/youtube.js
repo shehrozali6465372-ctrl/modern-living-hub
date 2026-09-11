@@ -306,6 +306,10 @@ export function registerYouTubeRoutes(app, opts) {
       prompt: "consent"
     });
 
+    console.log("YouTube OAuth client: " + (YT_CLIENT_ID.substring(0, 8) + "..." + YT_CLIENT_ID.substring(YT_CLIENT_ID.length - 6)));
+    console.log("YouTube OAuth redirect URI: " + YT_REDIRECT_URI);
+    console.log("YouTube OAuth endpoint: " + GOOGLE_AUTH_URL);
+    console.log("YouTube OAuth scope: " + YT_SCOPES.join(" "));
     console.log("YouTube OAuth start: state generated (length=" + state.length + ")");
     res.redirect(`${GOOGLE_AUTH_URL}?${params.toString()}`);
   });
