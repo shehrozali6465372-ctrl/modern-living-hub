@@ -923,3 +923,345 @@ p { margin-bottom: 1rem; }
         gap: 0.75rem;
     }
 }
+
+/* ─── YouTube Integration Styles ─── */
+
+.yt-main {
+    padding-top: 2rem;
+    padding-bottom: 3rem;
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+/* Status card (shared for disconnected + connected channel + upload) */
+.yt-status-card {
+    background: var(--color-bg, #fff);
+    border: 1px solid var(--color-border, #e2e8f0);
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 1.25rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+
+/* Loading state */
+#loading-state.yt-status-card {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    min-height: 120px;
+}
+
+.yt-spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid var(--color-border, #e2e8f0);
+    border-top-color: #ff0000;
+    border-radius: 50%;
+    animation: yt-spin .7s linear infinite;
+}
+@keyframes yt-spin { to { transform: rotate(360deg); } }
+
+.yt-loading-text {
+    color: var(--color-text-light, #64748b);
+    font-size: 0.9rem;
+}
+
+/* Error banner */
+.yt-error-banner {
+    display: none;
+    align-items: center;
+    gap: .75rem;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: .75rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.88rem;
+    color: #991b1b;
+}
+.yt-error-banner span { flex: 1; }
+.yt-error-close {
+    background: none;
+    border: none;
+    font-size: 1.2rem;
+    color: #991b1b;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+/* Platform icon */
+.yt-platform-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #fff0f0;
+    flex-shrink: 0;
+}
+
+/* Status title + badge */
+.yt-status-title {
+    font-size: 1.1rem;
+    color: var(--color-primary, #1e293b);
+    margin: .75rem 0 0;
+    text-align: center;
+}
+.yt-badge {
+    display: inline-block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: .2rem .65rem;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+}
+.yt-badge-disconnected {
+    background: #f1f5f9;
+    color: #64748b;
+}
+.yt-badge-connected {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.yt-status-desc {
+    color: var(--color-text-light, #64748b);
+    text-align: center;
+    margin: .75rem 0 1.25rem;
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+/* Disconnected layout */
+#disconnected-state.yt-status-card {
+    text-align: center;
+    padding: 2.5rem 2rem;
+}
+
+/* Connected state */
+.yt-channel-card {
+    padding: 1.5rem 2rem;
+}
+.yt-channel-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+.yt-channel-header .yt-status-title,
+.yt-channel-header .yt-badge {
+    text-align: left;
+}
+
+.yt-channel-info {
+    margin-bottom: 1rem;
+}
+.yt-channel-detail {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--color-bg-secondary, #f8fafc);
+    border: 1px solid var(--color-border, #e2e8f0);
+    border-radius: 10px;
+    padding: 1rem;
+}
+.yt-channel-avatar img {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--color-border, #e2e8f0);
+}
+.yt-channel-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: #fee2e2;
+    color: #b91c1c;
+    font-size: 1.6rem;
+    font-weight: 700;
+}
+.yt-channel-meta {
+    min-width: 0;
+}
+.yt-channel-name {
+    color: var(--color-text, #1e293b);
+    font-weight: 600;
+    margin: 0 0 .25rem;
+}
+.yt-channel-id {
+    color: var(--color-text-light, #64748b);
+    font-size: 0.82rem;
+    margin: 0;
+    word-break: break-all;
+}
+.yt-channel-id code {
+    background: rgba(0,0,0,.06);
+    padding: .1em .35em;
+    border-radius: 4px;
+    font-size: 0.82rem;
+}
+.yt-channel-loading,
+.yt-channel-error {
+    color: var(--color-text-light, #64748b);
+    font-size: 0.9rem;
+}
+
+.yt-channel-actions {
+    margin-top: 1rem;
+}
+
+/* Upload card */
+.yt-upload-card {
+    padding: 1.5rem 2rem;
+}
+.yt-section-title {
+    font-size: 1.05rem;
+    color: var(--color-primary, #1e293b);
+    margin-bottom: .75rem;
+}
+
+.yt-audit-notice {
+    background: #fef3cd;
+    border: 1px solid #ffc107;
+    border-radius: 8px;
+    padding: .8rem 1rem;
+    margin-bottom: 1.25rem;
+    color: #856404;
+    font-size: 0.88rem;
+    line-height: 1.5;
+}
+
+/* Upload button spinner */
+.yt-btn-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: yt-spin .7s linear infinite;
+    vertical-align: middle;
+    margin-left: 6px;
+}
+.yt-upload-btn {
+    width: 100%;
+    justify-content: center;
+}
+
+/* Upload result */
+.yt-upload-result {
+    margin-top: .85rem;
+    font-size: 0.9rem;
+    line-height: 1.55;
+    padding: .75rem 1rem;
+    border-radius: 8px;
+}
+.yt-upload-success {
+    background: #dcfce7;
+    border: 1px solid #bbf7d0;
+    color: #166534;
+}
+.yt-upload-error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #991b1b;
+}
+.yt-upload-info {
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    color: #075985;
+}
+
+/* Disconnect modal */
+.yt-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+}
+.yt-modal {
+    background: var(--color-bg, #fff);
+    border-radius: 12px;
+    padding: 1.75rem;
+    max-width: 420px;
+    width: 100%;
+    box-shadow: 0 10px 30px rgba(0,0,0,.15);
+}
+.yt-modal h3 {
+    font-size: 1.05rem;
+    color: var(--color-text, #1e293b);
+    margin-bottom: .75rem;
+}
+.yt-modal p {
+    color: var(--color-text-light, #64748b);
+    font-size: 0.92rem;
+    margin-bottom: 1.25rem;
+    line-height: 1.5;
+}
+.yt-modal-actions {
+    display: flex;
+    gap: .75rem;
+    justify-content: flex-end;
+}
+.yt-modal-actions .btn {
+    min-width: 110px;
+    text-align: center;
+}
+
+/* Button variants used in modal */
+.btn-secondary {
+    background: var(--color-bg-secondary, #f1f5f9);
+    color: var(--color-text, #1e293b);
+    border: 1px solid var(--color-border, #e2e8f0);
+    padding: .6rem 1.2rem;
+    border-radius: 8px;
+    font-size: 0.88rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition, .15s);
+}
+.btn-secondary:hover {
+    background: #e2e8f0;
+}
+
+/* Connected-state connect button */
+.yt-btn-connected {
+    background: var(--color-success, #10b981) !important;
+    pointer-events: none !important;
+    opacity: .7 !important;
+}
+
+/* ─── YouTube responsive ─── */
+@media (max-width: 640px) {
+    .yt-status-card { padding: 1.25rem; }
+    .yt-channel-card { padding: 1.25rem; }
+    .yt-upload-card { padding: 1.25rem; }
+    .yt-channel-detail {
+        flex-direction: column;
+        text-align: center;
+    }
+    .yt-channel-header {
+        justify-content: center;
+        text-align: center;
+    }
+    .yt-channel-avatar img { width: 56px; height: 56px; }
+    .yt-channel-placeholder { width: 56px; height: 56px; }
+    .yt-modal-actions { flex-direction: column; }
+    .yt-modal-actions .btn { width: 100%; }
+    #disconnect-youtube-btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .yt-upload-btn { width: 100%; }
+}

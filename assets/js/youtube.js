@@ -2,12 +2,6 @@
  * Modern Living Hub — YouTube Integration Frontend
  * Handles OAuth handoff, session token, channel info, video upload,
  * and processing status via the server-side YouTube backend API.
- *
- * Cross-site architecture (same as Pinterest/TikTok):
- *   1. Backend redirects to this page with ?youtube_connected=1&yt_handoff=<CODE>
- *   2. Frontend POSTs handoff code to /api/youtube/complete
- *   3. Backend returns a bearer session_token
- *   4. All subsequent API calls use Authorization: Bearer <session_token>
  */
 
 (function () {
@@ -16,6 +10,10 @@
     var BACKEND = (window.BACKEND_URL || '').replace(/\/+$/, '');
     var SESSION_TOKEN_KEY = 'mlh_youtube_session_token';
     var sessionToken = localStorage.getItem(SESSION_TOKEN_KEY) || null;
+
+    var CONNECTING_TEXT = 'Connecting…';
+    var CONNECT_TEXT = 'Connect YouTube';
+    var RECONNECT_TEXT = 'Reconnect YouTube';
 
     function isBackendConfigured() {
         return Boolean(BACKEND) && !BACKEND.includes('YOUR-BACKEND');
@@ -29,10 +27,31 @@
         return headers;
     }
 
-    function showError(el, msg) {
-        if (!el) return;
-        el.textContent = '\u26A0\uFE0F ' + msg;
-        el.style.display = 'block';
+    function setLoading(show) {
+        var loading = document.getElementById('loading-state');
+        if (loading) loading.style.display = show ? 'block' : 'none';
+    }
+
+    function setDisconnectedError(msg) {
+        var err = document.getElementById('disconnect-error');
+        if (err) {
+            err.textContent = msg;
+            err.style.display = 'block';
+        }
+    }
+
+    function showErrorBanner(msg) {
+        var banner = document.getElementById('yt-error-banner');
+        var text = document.getElementById('yt-error-text');
+        if (banner && text) {
+            text.textContent = msg;
+            banner.style.display = 'flex';
+        }
+    }
+
+    function clearErrorBanner() {
+        var banner = document.getElementById('yt-error-banner');
+        if (banner) banner.style.display = 'none';
     }
 
     function escapeHtml(text) {
@@ -43,50 +62,72 @@
 
     // ─── DOM references ───
     var connectBtn = document.getElementById('connect-youtube-btn');
+    var loadingState = document.getElementById('loading-state');
     var connectedState = document.getElementById('connected-state');
     var disconnectedState = document.getElementById('disconnected-state');
     var channelInfo = document.getElementById('channel-info');
     var uploadForm = document.getElementById('upload-form');
     var uploadResult = document.getElementById('upload-result');
-    var disconnectError = document.getElementById('disconnect-error');
+    var disconnectModal = document.getElementById('disconnect-modal');
+    var disconnectCancelBtn = document.getElementById('disconnect-cancel-btn');
+    var disconnectConfirmBtn = document.getElementById('disconnect-confirm-btn');
+    var disconnectBtn = document.getElementById('disconnect-youtube-btn');
+    var uploadBtn = document.getElementById('upload-btn');
+    var uploadBtnText = document.getElementById('upload-btn-text');
+    var uploadBtnSpinner = document.getElementById('upload-btn-spinner');
     var videoFile = document.getElementById('video-file');
     var videoInfo = document.getElementById('video-info');
 
-    function updateConnectLinks() {
-        var url = isBackendConfigured() ? BACKEND + '/youtube/auth' : '#';
-        if (connectBtn) connectBtn.href = url;
-        if (!isBackendConfigured() && connectBtn) {
-            connectBtn.style.pointerEvents = 'none';
-            connectBtn.style.opacity = '0.5';
-        }
-    }
-
+    // ─── UI state helpers ───
     function showConnectedUI() {
-        if (connectBtn) {
-            connectBtn.textContent = '\u2705 Connected';
-            connectBtn.href = '#';
-            connectBtn.style.pointerEvents = 'none';
-            connectBtn.style.opacity = '0.6';
-        }
+        setLoading(false);
+        clearErrorBanner();
         if (connectedState) connectedState.style.display = 'block';
         if (disconnectedState) disconnectedState.style.display = 'none';
+        if (connectBtn) {
+            connectBtn.textContent = '\u2705 Connected';
+            connectBtn.classList.add('yt-btn-connected');
+            connectBtn.href = '#';
+            connectBtn.style.pointerEvents = 'none';
+        }
         loadChannelInfo();
     }
 
     function showDisconnectedUI() {
-        if (connectBtn) {
-            connectBtn.textContent = '\u25B6\uFE0F Connect YouTube';
-            connectBtn.href = isBackendConfigured() ? BACKEND + '/youtube/auth' : '#';
-            connectBtn.style.pointerEvents = isBackendConfigured() ? '' : 'none';
-            connectBtn.style.opacity = isBackendConfigured() ? '' : '0.5';
-        }
+        setLoading(false);
+        clearErrorBanner();
         if (connectedState) connectedState.style.display = 'none';
         if (disconnectedState) disconnectedState.style.display = 'block';
-        if (channelInfo) channelInfo.innerHTML = '<p>Not connected.</p>';
+        if (connectBtn) {
+            connectBtn.textContent = CONNECT_TEXT;
+            connectBtn.classList.remove('yt-btn-connected');
+            connectBtn.href = isBackendConfigured() ? BACKEND + '/youtube/auth' : '#';
+            connectBtn.style.pointerEvents = isBackendConfigured() ? 'auto' : 'none';
+            connectBtn.style.opacity = isBackendConfigured() ? '' : '0.5';
+        }
+        if (channelInfo) channelInfo.innerHTML = '';
+        if (uploadForm) uploadForm.reset();
+        if (uploadResult) { uploadResult.style.display = 'none'; uploadResult.textContent = ''; }
+    }
+
+    function showConnecting() {
+        setLoading(false);
+        clearErrorBanner();
+        if (connectBtn) {
+            connectBtn.textContent = CONNECTING_TEXT;
+            connectBtn.style.pointerEvents = 'none';
+        }
+        var label = document.querySelector('.yt-status-title');
+        if (!label) return;
     }
 
     // ─── Complete handoff ───
     async function completeYTHandoff(code) {
+        if (!isBackendConfigured()) {
+            showErrorBanner('Backend URL not configured. Set window.BACKEND_URL first.');
+            showDisconnectedUI();
+            return false;
+        }
         try {
             var res = await fetch(BACKEND + '/api/youtube/complete', {
                 method: 'POST',
@@ -100,12 +141,12 @@
                 showConnectedUI();
                 return true;
             } else {
-                showError(disconnectError, data.error || 'Could not complete YouTube connection.');
+                showErrorBanner(data.error || 'Could not complete YouTube connection.');
                 showDisconnectedUI();
                 return false;
             }
         } catch (e) {
-            showError(disconnectError, 'Could not reach the server to complete YouTube connection.');
+            showErrorBanner('Could not reach the server to complete YouTube connection.');
             showDisconnectedUI();
             return false;
         }
@@ -118,6 +159,7 @@
         var error = params.get('yt_error');
 
         if (params.get('youtube_connected') === '1' && handoff) {
+            // Immediately clean the URL so refresh doesn't re-consume the handoff.
             window.history.replaceState({}, '', window.location.pathname);
             await completeYTHandoff(handoff);
             return;
@@ -125,30 +167,7 @@
 
         if (error) {
             window.history.replaceState({}, '', window.location.pathname);
-            showError(disconnectError, 'YouTube connection failed: ' + decodeURIComponent(error));
-        }
-    }
-
-    // ─── Check connection status ───
-    async function checkStatus() {
-        if (!isBackendConfigured()) {
-            showDisconnectedUI();
-            return;
-        }
-        try {
-            var res = await fetch(BACKEND + '/api/youtube/status', {
-                headers: authHeaders(),
-                credentials: 'include'
-            });
-            var data = await res.json();
-            if (data.connected) {
-                showConnectedUI();
-            } else {
-                sessionToken = null;
-                localStorage.removeItem(SESSION_TOKEN_KEY);
-                showDisconnectedUI();
-            }
-        } catch {
+            showErrorBanner(decodeURIComponent(error));
             showDisconnectedUI();
         }
     }
@@ -156,63 +175,153 @@
     // ─── Load channel info ───
     async function loadChannelInfo() {
         if (!channelInfo) return;
-        if (!isBackendConfigured()) return;
+
+        if (!sessionToken) {
+            channelInfo.innerHTML = '<p>Not connected.</p>';
+            return;
+        }
+
+        channelInfo.innerHTML = '<p class="yt-channel-loading">Loading channel information…</p>';
+
         try {
             var res = await fetch(BACKEND + '/api/youtube/channel', {
                 headers: authHeaders(),
                 credentials: 'include'
             });
-            var data = await res.json();
-            if (data.channel) {
-                var ch = data.channel;
-                channelInfo.innerHTML =
-                    '<p><strong>' + escapeHtml(ch.title) + '</strong></p>' +
-                    '<p style="font-size:0.85rem;color:var(--color-text-light);">' +
-                    'Channel ID: ' + escapeHtml(ch.id) + '</p>' +
-                    (ch.description ? '<p style="font-size:0.85rem;">' + escapeHtml(ch.description).substring(0, 200) + '</p>' : '');
-            } else {
-                channelInfo.innerHTML = '<p>No channel information available.</p>';
+
+            if (res.status === 401 || res.status === 403) {
+                // Session expired — clear YouTube session and show disconnected
+                sessionToken = null;
+                localStorage.removeItem(SESSION_TOKEN_KEY);
+                showDisconnectedUI();
+                showErrorBanner('Connection expired — reconnect YouTube.');
+                return;
             }
-        } catch {
-            channelInfo.innerHTML = '<p>Could not load channel information.</p>';
+
+            if (!res.ok) {
+                var errData = await res.json();
+                channelInfo.innerHTML = '<p class="yt-channel-error">Could not load channel info.</p>';
+                showErrorBanner(errData.error || 'Could not load channel information.');
+                return;
+            }
+
+            var data = await res.json();
+            renderChannelInfo(data);
+        } catch (e) {
+            channelInfo.innerHTML = '<p class="yt-channel-error">Could not reach the server.</p>';
+            showErrorBanner('Could not reach the server to load channel information.');
         }
     }
 
-    // ─── Video file preview ───
-    if (videoFile) {
-        videoFile.addEventListener('change', function () {
-            var file = this.files && this.files[0];
-            if (!file) return;
-            if (videoInfo) {
-                var sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-                videoInfo.textContent = file.name + ' (' + sizeMB + ' MB)';
+    function renderChannelInfo(data) {
+        if (!channelInfo) return;
+        var html = '<div class="yt-channel-avatar">';
+        if (data.thumbnail_url) {
+            html += '<img src="' + escapeHtml(data.thumbnail_url) + '" alt="Channel thumbnail" width="64" height="64">';
+        } else {
+            html += '<span class="yt-channel-placeholder">' + escapeHtml((data.title || 'C')[0].toUpperCase()) + '</span>';
+        }
+        html += '</div>';
+        html += '<div class="yt-channel-meta">';
+        html += '<p class="yt-channel-name"><strong>' + (data.title ? escapeHtml(data.title) : 'My Channel') + '</strong></p>';
+        if (data.id) html += '<p class="yt-channel-id">Channel ID: <code>' + escapeHtml(data.id) + '</code></p>';
+        html += '</div>';
+        channelInfo.innerHTML = '<div class="yt-channel-detail">' + html + '</div>';
+    }
+
+    // ─── Status check ───
+    async function checkStatus() {
+        if (!isBackendConfigured()) {
+            showErrorBanner('Backend URL not configured. Set window.BACKEND_URL first.');
+            showDisconnectedUI();
+            return;
+        }
+
+        if (!sessionToken) {
+            showDisconnectedUI();
+            return;
+        }
+
+        try {
+            var res = await fetch(BACKEND + '/api/youtube/status', {
+                headers: authHeaders(),
+                credentials: 'include'
+            });
+            var data = await res.json();
+
+            if (data.connected) {
+                showConnectedUI();
+            } else {
+                // Session expired or invalid
+                sessionToken = null;
+                localStorage.removeItem(SESSION_TOKEN_KEY);
+                showDisconnectedUI();
             }
+        } catch (e) {
+            showErrorBanner('Could not reach the server. Check your internet connection.');
+            showDisconnectedUI();
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    // ─── Connect button ───
+    if (connectBtn) {
+        connectBtn.addEventListener('click', function (e) {
+            if (!isBackendConfigured()) {
+                e.preventDefault();
+                showErrorBanner('Backend URL not configured. Set window.BACKEND_URL first.');
+                return;
+            }
+            if (connectBtn.textContent === CONNECTING_TEXT) {
+                e.preventDefault();
+                return;
+            }
+            connectBtn.textContent = CONNECTING_TEXT;
+            connectBtn.style.pointerEvents = 'none';
         });
     }
 
     // ─── Upload ───
+    function setUploadButtonBusy(busy, text) {
+        if (!uploadBtn) return;
+        uploadBtn.disabled = busy;
+        if (uploadBtnText) uploadBtnText.textContent = text || (busy ? 'Uploading…' : 'Upload to YouTube');
+        if (uploadBtnSpinner) uploadBtnSpinner.style.display = busy ? 'inline-block' : 'none';
+    }
+
+    if (videoFile) {
+        videoFile.addEventListener('change', function () {
+            if (videoFile.files && videoFile.files[0]) {
+                var sizeMB = (videoFile.files[0].size / (1024 * 1024)).toFixed(1);
+                if (videoInfo) videoInfo.textContent = 'Selected: ' + videoFile.files[0].name + ' (' + sizeMB + ' MB)';
+            } else {
+                if (videoInfo) videoInfo.textContent = '';
+            }
+        });
+    }
+
     if (uploadForm) {
         uploadForm.addEventListener('submit', async function (e) {
             e.preventDefault();
-            if (!isBackendConfigured()) return;
+            if (!sessionToken) {
+                showErrorBanner('YouTube not connected. Please connect first.');
+                return;
+            }
 
+            var file = videoFile ? videoFile.files[0] : null;
             var title = document.getElementById('video-title').value.trim();
-            var file = videoFile && videoFile.files && videoFile.files[0];
-
             if (!file) {
-                uploadResult.textContent = '\u274C Please select a video file.';
-                uploadResult.style.color = 'var(--color-error)';
+                setUploadMessage('\u274C Please select a video file.', 'error');
                 return;
             }
             if (!title) {
-                uploadResult.textContent = '\u274C Title is required.';
-                uploadResult.style.color = 'var(--color-error)';
+                setUploadMessage('\u274C Title is required.', 'error');
                 return;
             }
 
-            uploadResult.textContent = '\u23F3 Uploading video…';
-            uploadResult.style.color = 'var(--color-text-light)';
-            document.getElementById('upload-btn').disabled = true;
+            setUploadButtonBusy(true, 'Uploading…');
+            setUploadMessage('\u23F3 Upload starting…', 'info');
 
             try {
                 var formData = new FormData();
@@ -233,28 +342,35 @@
                 var data = await res.json();
 
                 if (!res.ok) {
-                    uploadResult.textContent = '\u274C ' + (data.error || 'Upload failed.');
-                    uploadResult.style.color = 'var(--color-error)';
+                    setUploadMessage('\u274C ' + (data.error || 'Upload failed.'), 'error');
+                    setUploadButtonBusy(false);
                     return;
                 }
 
-                uploadResult.innerHTML = '\u2705 Video uploaded! Video ID: <strong>' +
-                    escapeHtml(data.video_id) + '</strong> — ' +
+                setUploadMessage(
+                    '\u2705 Upload complete! Video ID: <strong>' + escapeHtml(data.video_id) + '</strong> — ' +
                     '<a href="' + escapeHtml(data.video_url) + '" target="_blank" rel="noopener">View on YouTube</a>' +
-                    ' (Status: ' + escapeHtml(data.privacy_status) + ')';
-                uploadResult.style.color = 'var(--color-success)';
+                    ' (Status: ' + escapeHtml(data.privacy_status) + ')',
+                    'success'
+                );
                 uploadForm.reset();
                 if (videoInfo) videoInfo.textContent = '';
+                setUploadButtonBusy(false);
+                setUploadMessage('Processing…', 'info');
 
-                // Poll processing status
                 pollVideoStatus(data.video_id);
             } catch (err) {
-                uploadResult.textContent = '\u274C Could not reach the server. ' + (err.message || '');
-                uploadResult.style.color = 'var(--color-error)';
-            } finally {
-                document.getElementById('upload-btn').disabled = false;
+                setUploadMessage('\u274C Could not reach the server. ' + (err.message || ''), 'error');
+                setUploadButtonBusy(false);
             }
         });
+    }
+
+    function setUploadMessage(html, type) {
+        if (!uploadResult) return;
+        uploadResult.style.display = 'block';
+        uploadResult.className = 'yt-upload-result yt-upload-' + (type || 'info');
+        uploadResult.innerHTML = html || '';
     }
 
     // ─── Poll video processing status ───
@@ -274,27 +390,57 @@
                 var data = await res.json();
 
                 if (data.processing_status === 'succeeded') {
-                    uploadResult.innerHTML += '<br>\u2705 Processing complete!';
+                    setUploadMessage('<br>\u2705 Processing complete!', 'success');
                     return;
                 }
                 if (data.processing_status === 'failed') {
-                    uploadResult.innerHTML += '<br>\u274C Processing failed: ' + escapeHtml(data.failure_reason || 'Unknown');
+                    setUploadMessage('<br>\u274C Processing failed: ' + escapeHtml(data.failure_reason || 'Unknown'), 'error');
                     return;
                 }
 
-                uploadResult.innerHTML += '<br>\u23F3 Processing… (attempt ' + pollCount + '/' + maxPolls + ')';
+                setUploadMessage('\u23F3 Processing… (attempt ' + pollCount + '/' + maxPolls + ')', 'info');
             } catch {
                 // ignore polling errors
             }
         }
-        uploadResult.innerHTML += '<br>\u23F3 Still processing — check YouTube directly.';
+        setUploadMessage('\u23F3 Still processing — check YouTube directly.', 'info');
     }
 
-    // ─── Disconnect ───
-    var disconnectBtn = document.getElementById('disconnect-youtube-btn');
+    // ─── Disconnect confirmation modal ───
     if (disconnectBtn) {
-        disconnectBtn.addEventListener('click', async function () {
-            if (!isBackendConfigured()) return;
+        disconnectBtn.addEventListener('click', function () {
+            if (disconnectModal) disconnectModal.style.display = 'flex';
+        });
+    }
+
+    function closeDisconnectModal() {
+        if (disconnectModal) disconnectModal.style.display = 'none';
+    }
+
+    if (disconnectCancelBtn) {
+        disconnectCancelBtn.addEventListener('click', closeDisconnectModal);
+    }
+
+    if (disconnectModal) {
+        disconnectModal.addEventListener('click', function (e) {
+            if (e.target === disconnectModal) closeDisconnectModal();
+        });
+    }
+
+    if (disconnectConfirmBtn) {
+        disconnectConfirmBtn.addEventListener('click', async function () {
+            if (!isBackendConfigured()) {
+                closeDisconnectModal();
+                showErrorBanner('Backend URL not configured.');
+                return;
+            }
+
+            closeDisconnectModal();
+            if (connectBtn) {
+                connectBtn.textContent = 'Disconnecting…';
+                connectBtn.style.pointerEvents = 'none';
+            }
+
             try {
                 var res = await fetch(BACKEND + '/api/youtube/disconnect', {
                     method: 'POST',
@@ -302,22 +448,39 @@
                     headers: authHeaders({ 'Content-Type': 'application/json' })
                 });
                 var data = await res.json();
+
                 if (data.disconnected) {
                     sessionToken = null;
                     localStorage.removeItem(SESSION_TOKEN_KEY);
                     showDisconnectedUI();
                 } else {
-                    showError(disconnectError, 'Could not disconnect.');
+                    showErrorBanner(data.error || 'Could not disconnect.');
+                    showDisconnectedUI();
                 }
-            } catch {
-                showError(disconnectError, 'Could not reach the server.');
+            } catch (e) {
+                showErrorBanner('Could not reach the server to disconnect.');
+                showDisconnectedUI();
             }
         });
     }
 
     // ─── Init ───
-    updateConnectLinks();
-    handleUrlParams().then(function () {
-        checkStatus();
-    });
+    setLoading(true);
+    updateConnectLinkForProduction();
+
+    function updateConnectLinkForProduction() {
+        if (!connectBtn) return;
+        if (isBackendConfigured()) {
+            connectBtn.href = BACKEND + '/youtube/auth';
+        } else {
+            connectBtn.href = '#';
+            connectBtn.style.pointerEvents = 'none';
+        }
+    }
+
+    // Entry point: handle handoff first if present, then status check.
+    (async function init() {
+        await handleUrlParams();
+        await checkStatus();
+    })();
 })();
