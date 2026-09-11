@@ -50,12 +50,22 @@ function parseCookies(headers) {
   for (const h of (headers || [])) {
     const eq = h.indexOf("=");
     if (eq > 0) {
-      const name = h.substring(0, eq);
-      const val = h.substring(eq + 1, h.indexOf(";", eq + 1) > 0 ? h.indexOf(";", eq + 1) : undefined);
+      const name = h.substring(0, eq).trim();
+      const valEnd = h.indexOf(";", eq + 1);
+      const val = h.substring(eq + 1, valEnd > 0 ? valEnd : undefined).trim();
       cookies[name] = val;
     }
   }
   return cookies;
+}
+
+function extractSignedCookieValue(cookies, name) {
+  // Signed cookies have the format: name=value.signature
+  // The cookie value we want is before the ".signature" part
+  const fullValue = cookies[name];
+  if (!fullValue) return null;
+  const dotIdx = fullValue.lastIndexOf(".");
+  return dotIdx > 0 ? fullValue.substring(0, dotIdx) : fullValue;
 }
 
 const TS = {};
@@ -652,5 +662,159 @@ describe("YouTube Integration", () => {
   });
 
 });
+
+
+  it("25. OAuth state survives Google redirect via cookie (no in-memory session needed)", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      // Test that the OAuth state is validated solely from the signed cookie
+      // without relying on req.session (which may be lost on restart/hibernation)
+      const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      const cookieState = extractSignedCookieValue(cookies, "mlh.yt.oauth_state");
+      
+      assert.ok(cookieState, "Signed cookie should contain OAuth state");
+      assert.ok(cookieState.length >= 32, "State should be cryptographically random (64+ hex chars)");
+      
+      // Now simulate callback using ONLY the cookie (no session continuity)
+      // Build cookie header with the signed cookie value
+      const cookieHeader = Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ");
+      const r2 = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: cookieHeader } }
+      );
+      assert.equal(r2.status, 302, "Callback should redirect (302)");
+      const redirectUrl = r2.headers.get("location");
+      assert.ok(redirectUrl.includes("youtube_connected=1"), "Should have youtube_connected=1");
+      assert.ok(redirectUrl.includes("yt_handoff="), "Should have yt_handoff");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("26. Expired OAuth state is rejected", async () => {
+    // Simulate expired state by not sending the cookie at all
+    const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+    const loc = r1.headers.get("location");
+    const state = new URL(loc).searchParams.get("state");
+    
+    // No cookie = expired/missing
+    const r2 = await fetch(
+      BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(state),
+      { redirect: "manual" }
+    );
+    assert.equal(r2.status, 302, "Callback should redirect (302)");
+    const redirectUrl = r2.headers.get("location");
+    assert.ok(redirectUrl.includes("yt_error="), "Should redirect with error");
+    assert.ok(redirectUrl.includes("invalid_state"), "Should mention invalid state for expired cookie");
+  });
+
+  it("27. Mismatched OAuth state is rejected", async () => {
+    // Use a valid callback state but mismatch the cookie
+    const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+    const loc = r1.headers.get("location");
+    const state = new URL(loc).searchParams.get("state");
+    const cookies = parseCookies(r1.headers.getSetCookie());
+    const cookieHeader = Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ");
+    
+    // Send a DIFFERENT state in the callback query param
+    const wrongState = "0000000000000000000000000000000000000000000000000000000000000000";
+    
+    const r2 = await fetch(
+      BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(wrongState),
+      { redirect: "manual", headers: { Cookie: cookieHeader } }
+    );
+    assert.equal(r2.status, 302, "Callback should redirect (302)");
+    const redirectUrl = r2.headers.get("location");
+    assert.ok(redirectUrl.includes("yt_error="), "Should redirect with error");
+    assert.ok(redirectUrl.includes("invalid_state"), "Should mention invalid state for mismatch");
+  });
+
+  it("28. OAuth state cookie has correct security attributes", async () => {
+    const r = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+    const cookies = r.headers.getSetCookie();
+    const stateCookie = cookies.find(c => c.startsWith("mlh.yt.oauth_state="));
+    assert.ok(stateCookie, "OAuth state cookie should be set");
+    assert.ok(stateCookie.includes("HttpOnly"), "Cookie should be HttpOnly");
+    assert.ok(stateCookie.includes("Path=/"), "Cookie should have Path=/");
+    // In test mode (NODE_ENV=test), secure should be false, sameSite=lax
+    assert.ok(stateCookie.includes("SameSite=Lax") || stateCookie.includes("SameSite=None"), "Cookie should have SameSite");
+    assert.ok(stateCookie.includes("Max-Age=600") || stateCookie.includes("max-age=600"), "Cookie should have 10 minute maxAge (600 seconds)");
+  });
+
+  it("29. OAuth state cookie is consumed after successful callback", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      
+      // First callback - should succeed
+      const cookieHeader1 = Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ");
+      const r2 = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: cookieHeader1 } }
+      );
+      assert.equal(r2.status, 302);
+      
+      // Get cookies from the FIRST callback response (which should have cleared the state cookie)
+      const callbackCookies = parseCookies(r2.headers.getSetCookie());
+      const cookieHeader2 = Object.entries(callbackCookies).map(([k,v]) => k+"="+v).join("; ");
+      
+      // Try to use the SAME state again - should fail because cookie was cleared
+      const r3 = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code2&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: cookieHeader2 } }
+      );
+      assert.equal(r3.status, 302, "Second callback should redirect");
+      const loc3 = r3.headers.get("location");
+      assert.ok(loc3.includes("yt_error=invalid_state"), "Reusing consumed state should fail");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("30. Multiple concurrent OAuth flows use independent states", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      // Start two OAuth flows
+      const r1a = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+      const loc1a = r1a.headers.get("location");
+      const state1 = new URL(loc1a).searchParams.get("state");
+      const cookies1 = parseCookies(r1a.headers.getSetCookie());
+      
+      const r1b = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+      const loc1b = r1b.headers.get("location");
+      const state2 = new URL(loc1b).searchParams.get("state");
+      const cookies2 = parseCookies(r1b.headers.getSetCookie());
+      
+      assert.notEqual(state1, state2, "Each flow should generate unique state");
+      
+      // Complete first flow
+      const r2a = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code1&state=" + encodeURIComponent(state1),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies1).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+      assert.equal(r2a.status, 302);
+      assert.ok(r2a.headers.get("location").includes("youtube_connected=1"));
+      
+      // Second flow should still work with its own state
+      const r2b = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code2&state=" + encodeURIComponent(state2),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies2).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+      assert.equal(r2b.status, 302);
+      assert.ok(r2b.headers.get("location").includes("youtube_connected=1"));
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
 
 console.log("\n✅ YouTube tests complete.\n");

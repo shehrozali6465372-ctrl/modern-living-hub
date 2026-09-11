@@ -82,7 +82,8 @@ export function registerYouTubeRoutes(app, opts) {
     res.cookie("mlh.ytoken", enc, {
       httpOnly: true, secure: isProduction,
       sameSite: isProduction ? "none" : "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 30
+      maxAge: 1000 * 60 * 60 * 24 * 30,
+      path: "/"
     });
   }
 
@@ -92,7 +93,7 @@ export function registerYouTubeRoutes(app, opts) {
   }
 
   function clearYTToken(res) {
-    res.clearCookie("mlh.ytoken");
+    res.clearCookie("mlh.ytoken", { path: "/" });
   }
 
   // ─── In-memory stores ───
@@ -291,7 +292,8 @@ export function registerYouTubeRoutes(app, opts) {
     res.cookie("mlh.yt.oauth_state", state, {
       httpOnly: true, secure: isProduction,
       sameSite: isProduction ? "none" : "lax",
-      maxAge: 10 * 60 * 1000, signed: true
+      maxAge: 10 * 60 * 1000, signed: true,
+      path: "/"
     });
 
     const params = new URLSearchParams({
@@ -315,12 +317,14 @@ export function registerYouTubeRoutes(app, opts) {
 
     if (error) {
       console.error("YouTube OAuth callback error:", error);
+      res.clearCookie("mlh.yt.oauth_state", { path: "/" });
       return res.redirect(`${FRONTEND_URL}/youtube.html?yt_error=${encodeURIComponent(error)}`);
     }
 
     // Validate state
     if (!state || state !== cookieState) {
       console.error("YouTube OAuth state mismatch");
+      res.clearCookie("mlh.yt.oauth_state", { path: "/" });
       return res.redirect(`${FRONTEND_URL}/youtube.html?yt_error=invalid_state`);
     }
 
@@ -396,6 +400,9 @@ export function registerYouTubeRoutes(app, opts) {
       };
       storeYTTokens(sessionId, tokenData);
       persistYTToken(res, tokenData);
+
+      // Clear the OAuth state cookie after successful validation (consumed)
+      res.clearCookie("mlh.yt.oauth_state", { path: "/" });
 
       // Create one-time handoff code
       const handoffCode = createYTHandoff(sessionId);
