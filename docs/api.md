@@ -2,38 +2,86 @@
 
 ## Overview
 
-Modern Living Hub provides RESTful APIs for content management, multi-platform publishing support, and AI-powered content generation.
+Modern Living Hub provides RESTful APIs for multi-platform content publishing via Pinterest, TikTok, and YouTube integrations.
 
 ## Authentication
 
-All API requests require authentication using OAuth 2.0 bearer tokens.
+- **Pinterest**: OAuth 2.0 with one-time handoff + bearer session token
+- **TikTok**: OAuth 2.0 with encrypted token cookie
+- **YouTube**: OAuth 2.0 with one-time handoff + bearer session token
 
-## Rate Limits
+All authenticated endpoints require the platform-specific bearer session token or encrypted cookie.
 
-- Standard: 1000 requests per hour
-- Premium: 10000 requests per hour
+## Backend Base URL
 
-## Endpoints
+The backend is hosted at `https://modern-living-hub.onrender.com`.
 
-### Content API
-- `POST /api/v1/content/generate` — AI content generation
-- `GET /api/v1/content/:id` — Retrieve content
-- `PUT /api/v1/content/:id` — Update content
+## Platform Endpoints
 
-### Pinterest API
-- `POST /api/v1/pinterest/pin` — Schedule a pin
-- `GET /api/v1/pinterest/analytics` — Get pin analytics
-- `GET /api/v1/pinterest/boards` — List boards
+### Health Check
 
-### Analytics
-- `GET /api/v1/analytics/overview` — Platform analytics
-- `GET /api/v1/analytics/content` — Content performance
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check with safe config diagnostics |
+
+### Pinterest
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/auth/pinterest` | No | Start Pinterest OAuth flow |
+| GET | `/auth/pinterest/callback` | No | Pinterest OAuth callback |
+| POST | `/api/pinterest/complete` | Handoff code | Complete OAuth handoff → bearer token |
+| GET | `/api/pinterest/status` | Bearer | Check Pinterest connection status |
+| POST | `/api/pinterest/disconnect` | Bearer | Revoke Pinterest and clear tokens |
+| GET | `/api/pinterest/account` | Bearer | Get Pinterest account info |
+| GET | `/api/pinterest/boards` | Bearer | List authenticated user's boards |
+| POST | `/api/pinterest/boards` | Bearer | Create a new board |
+| POST | `/api/pinterest/pins` | Bearer | Create a new pin |
+
+### TikTok
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/tiktok/auth` | No | Start TikTok OAuth flow |
+| GET | `/tiktok/auth/callback` | No | TikTok OAuth callback |
+| POST | `/api/tiktok/complete` | Handoff code | Complete OAuth handoff → session |
+| GET | `/api/tiktok/status` | Cookie | Check TikTok connection status |
+| GET | `/api/tiktok/creator-info` | Cookie | Get TikTok creator information |
+| POST | `/api/tiktok/disconnect` | Cookie | Revoke TikTok and clear tokens |
+| POST | `/api/tiktok/post/init` | Cookie | Initialize Direct Post video upload |
+| POST | `/api/tiktok/post/upload` | Cookie | Upload video to TikTok |
+| GET | `/api/tiktok/post/status/:publish_id` | Cookie | Check post processing status |
+
+### YouTube
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/youtube/auth` | No | Start YouTube OAuth flow |
+| GET | `/youtube/auth/callback` | No | YouTube OAuth callback |
+| POST | `/api/youtube/complete` | Handoff code | Complete OAuth handoff → bearer token |
+| GET | `/api/youtube/status` | Bearer | Check YouTube connection status |
+| GET | `/api/youtube/channel` | Bearer | Get authenticated channel info |
+| POST | `/api/youtube/upload` | Bearer | Upload video to YouTube (multipart) |
+| GET | `/api/youtube/video-status/:videoId` | Bearer | Check video processing status |
+| POST | `/api/youtube/disconnect` | Bearer | Disconnect YouTube and clear tokens |
 
 ## Error Codes
 
-- `400` — Bad Request
-- `401` — Unauthorized
-- `403` — Forbidden
-- `404` — Not Found
-- `429` — Rate Limited
-- `500` — Internal Server Error
+| Code | Description |
+|------|-------------|
+| 400 | Bad Request — missing or invalid parameters |
+| 401 | Unauthorized — no valid session/token |
+| 403 | Forbidden — insufficient permissions |
+| 404 | Not Found |
+| 429 | Rate Limited by upstream API |
+| 500 | Internal Server Error |
+
+## Security
+
+- All OAuth client secrets remain server-side only
+- Access/refresh tokens are never exposed to the frontend
+- One-time handoff codes are single-use with 5-minute TTL
+- Bearer session tokens are opaque random hex strings (24-hour TTL)
+- CORS is restricted to the authorized frontend origin
+- OAuth state parameter validates CSRF protection
+- HTTPS required in production

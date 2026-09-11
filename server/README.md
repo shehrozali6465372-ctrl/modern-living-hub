@@ -40,6 +40,12 @@ npm start
 | `FRONTEND_URL`            | Yes      | Full deployed frontend base URL including project path. e.g. `https://shehrozali6465372-ctrl.github.io/modern-living-hub`. CORS origin is derived from this automatically. |
 | `PORT`                    | No       | Server port, defaults to 3001                            |
 | `NODE_ENV`                | No       | Set to `production` for secure HTTPS cookies + SameSite=None |
+| `TIKTOK_CLIENT_KEY`        | No       | TikTok app client key (for TikTok integration)             |
+| `TIKTOK_CLIENT_SECRET`      | No       | TikTok app client secret (server-side only)               |
+| `TIKTOK_REDIRECT_URI`       | No       | TikTok OAuth callback URL                                |
+| `YOUTUBE_CLIENT_ID`         | No       | YouTube/Google OAuth client ID                            |
+| `YOUTUBE_CLIENT_SECRET`     | No       | YouTube/Google OAuth client secret (server-side only)     |
+| `YOUTUBE_REDIRECT_URI`      | No       | YouTube OAuth callback URL                                |
 
 ## How FRONTEND_URL Works
 
@@ -63,6 +69,11 @@ The app requests these scopes only:
 - `pins:read`
 - `pins:write`
 
+### Required YouTube Scopes
+
+The YouTube integration requests these scopes only:
+- `youtube.upload`
+
 ## API Endpoints
 
 | Method | Path                          | Description                              |
@@ -76,6 +87,14 @@ The app requests these scopes only:
 | GET    | `/api/pinterest/boards`       | List authenticated user's boards         |
 | POST   | `/api/pinterest/boards`       | Create a new board                       |
 | POST   | `/api/pinterest/pins`         | Create a new pin                         |
+| GET    | `/youtube/auth`               | Start YouTube OAuth flow                 |
+| GET    | `/youtube/auth/callback`      | YouTube OAuth callback                   |
+| POST   | `/api/youtube/complete`       | Complete YouTube handoff → session token |
+| GET    | `/api/youtube/status`         | Check YouTube connection status          |
+| GET    | `/api/youtube/channel`        | Get authenticated channel info           |
+| POST   | `/api/youtube/upload`         | Upload video to YouTube                  |
+| GET    | `/api/youtube/video-status/:id`| Check video processing status           |
+| POST   | `/api/youtube/disconnect`     | Disconnect YouTube and clear tokens      |
 
 ## Cross-Origin Authentication
 
@@ -180,3 +199,38 @@ The `credentials: "include"` flag ensures the session cookie is sent.
 
 If `BACKEND_URL` contains `YOUR-BACKEND` or is empty, the frontend shows
 a configuration error instead of silently sending requests to GitHub Pages.
+
+## YouTube Integration
+
+### Required Google Cloud Console Configuration
+
+1. Go to https://console.cloud.google.com/
+2. Create a project or select an existing one
+3. Enable the **YouTube Data API v3**
+4. Create OAuth 2.0 credentials (Web application type)
+5. Set the **Authorized redirect URI** to exactly:
+   ```
+   https://YOUR-BACKEND-DOMAIN.com/youtube/auth/callback
+   ```
+6. Note the Client ID and Client Secret
+
+### Required YouTube Environment Variables
+
+| Variable                | Description                                    |
+|-------------------------|------------------------------------------------|
+| `YOUTUBE_CLIENT_ID`     | Google OAuth client ID                         |
+| `YOUTUBE_CLIENT_SECRET` | Google OAuth client secret (server-side only)  |
+| `YOUTUBE_REDIRECT_URI`  | Exact callback URL registered in Google Console|
+
+### YouTube Upload Behavior
+
+- Videos are uploaded via multipart form-data (not base64 JSON)
+- Supported privacy levels: `private`, `unlisted`, `public` (default: `private`)
+- YouTube API may restrict `public` uploads pending channel audit
+- The `madeForKids` flag maps to YouTube's `selfDeclaredMadeForKids`
+- Category IDs map to YouTube's standard video categories (e.g., 22 = People & Blogs)
+
+### YouTube Module Architecture
+
+The YouTube integration is implemented as an isolated module (`server/src/youtube.js`)
+that registers its own routes without modifying the core server logic.

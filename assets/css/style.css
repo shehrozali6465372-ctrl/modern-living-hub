@@ -764,6 +764,28 @@ p { margin-bottom: 1rem; }
     transform: translateY(-1px);
 }
 
+.btn-youtube {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #ff0000;
+    color: #ffffff;
+    border: none;
+    padding: 0.75rem 1.75rem;
+    border-radius: var(--border-radius);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: var(--transition);
+}
+
+.btn-youtube:hover {
+    background: #cc0000;
+    color: #ffffff;
+    transform: translateY(-1px);
+}
+
 .btn-disconnect {
     background: transparent;
     border: 1px solid var(--color-error);

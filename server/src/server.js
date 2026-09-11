@@ -827,6 +827,10 @@ function handleApiError(status, res) {
 import { registerTikTokRoutes } from "./tiktok.js";
 registerTikTokRoutes(app, { SESSION_SECRET, FRONTEND_URL, isProduction });
 
+// ─── YouTube integration (isolated module) ───
+import { registerYouTubeRoutes } from "./youtube.js";
+registerYouTubeRoutes(app, { SESSION_SECRET, FRONTEND_URL, isProduction });
+
 // ─── Start server ───
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Modern Living Hub backend running on http://0.0.0.0:${PORT}`);
