@@ -53,7 +53,7 @@
             <div class="hero-content">
                 <h1>Modern Living Hub</h1>
                 <p class="hero-subtitle">Universal AI Content Operating System</p>
-                <p class="hero-description">Empowering creators and businesses with an AI-driven content ecosystem. Automate publishing across multiple platforms — starting with Pinterest and TikTok — and scale your digital presence.</p>
+                <p class="hero-description">Empowering creators and businesses with an AI-driven content ecosystem. Automate publishing across multiple platforms — starting with Pinterest, TikTok, and YouTube — and scale your digital presence.</p>
                 <div class="hero-actions">
                     <a href="about.html" class="btn btn-primary">Learn More</a>
                     <a href="contact.html" class="btn btn-secondary">Get in Touch</a>
@@ -62,6 +62,9 @@
                     </a>
                     <a href="/tiktok/auth" class="btn btn-tiktok" id="connect-tiktok-btn">
                         🎵 Connect TikTok
+                    </a>
+                    <a href="/youtube/auth" class="btn btn-youtube" id="connect-youtube-btn">
+                        ▶️ Connect YouTube
                     </a>
                 </div>
 
@@ -78,6 +81,14 @@
                     <div class="pinterest-status-inner">
                         <span class="pinterest-connected">✅ TikTok Connected</span>
                         <button class="btn btn-disconnect" id="disconnect-tiktok-btn">Disconnect TikTok</button>
+                    </div>
+                </div>
+
+                <!-- YouTube connection status -->
+                <div id="youtube-status" class="pinterest-status" style="display:none;">
+                    <div class="pinterest-status-inner">
+                        <span class="pinterest-connected">✅ YouTube Connected</span>
+                        <button class="btn btn-disconnect" id="disconnect-youtube-btn">Disconnect YouTube</button>
                     </div>
                 </div>
             </div>
@@ -190,7 +201,7 @@
       // Show a clear error if BACKEND_URL was never configured
       if (!window.BACKEND_URL || window.BACKEND_URL.includes('YOUR-BACKEND')) {
         document.addEventListener('DOMContentLoaded', function () {
-          var banners = document.querySelectorAll('.btn-pinterest, .btn-tiktok');
+          var banners = document.querySelectorAll('.btn-pinterest, .btn-tiktok, .btn-youtube');
           banners.forEach(function (btn) {
             btn.style.pointerEvents = 'none';
             btn.style.opacity = '0.5';
@@ -206,5 +217,67 @@
     </script>
     <script src="assets/js/pinterest.js" defer></script>
     <script src="assets/js/tiktok.js" defer></script>
+    <script>
+      // ─── YouTube homepage connect/status (inline, does not touch Pinterest/TikTok JS) ───
+      (function () {
+        var B = (window.BACKEND_URL || '').replace(/\/+$/, '');
+        var KEY = 'mlh_youtube_session_token';
+        var token = localStorage.getItem(KEY) || null;
+        var connectBtn  = document.getElementById('connect-youtube-btn');
+        var statusBanner = document.getElementById('youtube-status');
+        var disconnectBtn = document.getElementById('disconnect-youtube-btn');
+
+        if (connectBtn) {
+          if (B && !B.includes('YOUR-BACKEND')) {
+            connectBtn.href = B + '/youtube/auth';
+          } else {
+            connectBtn.href = '#';
+            connectBtn.style.pointerEvents = 'none';
+            connectBtn.style.opacity = '0.5';
+          }
+        }
+
+        if (!token || !B || B.includes('YOUR-BACKEND')) return;
+
+        fetch(B + '/api/youtube/status', { headers: { Authorization: 'Bearer ' + token }, credentials: 'include' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.connected) {
+              if (connectBtn) {
+                connectBtn.textContent = '\u2705 YouTube Connected';
+                connectBtn.href = '#';
+                connectBtn.style.pointerEvents = 'none';
+                connectBtn.style.opacity = '0.6';
+              }
+              if (statusBanner) statusBanner.style.display = 'block';
+            } else {
+              localStorage.removeItem(KEY);
+            }
+          })
+          .catch(function () {});
+
+        if (disconnectBtn) {
+          disconnectBtn.addEventListener('click', function () {
+            if (!confirm('Disconnect your YouTube channel?')) return;
+            fetch(B + '/api/youtube/disconnect', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }
+            })
+            .then(function () {
+              localStorage.removeItem(KEY);
+              if (connectBtn) {
+                connectBtn.textContent = '\u25B6\uFE0F Connect YouTube';
+                connectBtn.href = B + '/youtube/auth';
+                connectBtn.style.pointerEvents = 'auto';
+                connectBtn.style.opacity = '';
+              }
+              if (statusBanner) statusBanner.style.display = 'none';
+            })
+            .catch(function () {});
+          });
+        }
+      })();
+    </script>
 </body>
 </html>
