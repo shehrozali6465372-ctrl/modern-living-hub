@@ -22,8 +22,16 @@ const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 const YOUTUBE_UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos";
 
-// YouTube upload scope
-const YT_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"];
+// YouTube OAuth scopes:
+//   youtube.upload   — required for videos.insert (existing upload flow)
+//   youtube.readonly — minimal scope that authorizes channels.list?mine=true
+//                      so the authenticated channel info can load in the UI.
+// Without youtube.readonly, Google returns HTTP 403 (insufficientPermissions)
+// for channels.list?mine=true and the channel area cannot be populated.
+const YT_SCOPES = [
+  "https://www.googleapis.com/auth/youtube.upload",
+  "https://www.googleapis.com/auth/youtube.readonly"
+];
 
 export function registerYouTubeRoutes(app, opts) {
   const { SESSION_SECRET, FRONTEND_URL, isProduction } = opts;
@@ -467,8 +475,12 @@ export function registerYouTubeRoutes(app, opts) {
         );
         const cdata = await cr.json().catch(() => ({}));
         if (!cr.ok) {
-          const reason = cdata?.error?.reason || cdata?.error?.code || String(cr.status);
-          console.error("YouTube channel lookup (callback): status=" + cr.status + " reason=" + reason + " stage=callback");
+          // Safe diagnostics: Google's reason lives at error.errors[0].reason.
+          // Never log tokens, secrets, cookies, or the Authorization header.
+          const apiErr = cdata?.error || {};
+          const reason = apiErr.errors?.[0]?.reason || apiErr.code || String(cr.status);
+          const message = String(apiErr.message || "").slice(0, 300) || "no message";
+          console.error("YouTube channel lookup (callback): status=" + cr.status + " reason=" + reason + " message=" + message + " stage=callback");
         } else if (cdata.items && cdata.items.length > 0) {
           const ch = cdata.items[0];
           channelInfo = {
@@ -575,8 +587,12 @@ export function registerYouTubeRoutes(app, opts) {
       // was rejected (e.g. scope restriction or transient API error). Surface a
       // safe 502 so the frontend keeps the Connected state instead of treating
       // this as a session failure (401/403 would clear the valid session token).
-      const reason = raw?.error?.reason || raw?.error?.code || String(r.status);
-      console.error("YouTube channel lookup failed: status=" + r.status + " reason=" + reason + " stage=channel");
+      // Safe diagnostics: reason is at error.errors[0].reason. Never log
+      // tokens, secrets, cookies, or the Authorization header.
+      const apiErr = raw?.error || {};
+      const reason = apiErr.errors?.[0]?.reason || apiErr.code || String(r.status);
+      const message = String(apiErr.message || "").slice(0, 300) || "no message";
+      console.error("YouTube channel lookup failed: status=" + r.status + " reason=" + reason + " message=" + message + " stage=channel");
       return res.status(502).json({
         error: "Channel information is currently unavailable. Your connection is still active.",
         channel: null

@@ -86,7 +86,7 @@ const MOCK_GOOGLE_TOKEN = {
   refresh_token: "mock_youtube_refresh_token_xyz789",
   expires_in: 3600,
   token_type: "Bearer",
-  scope: "https://www.googleapis.com/auth/youtube.upload"
+  scope: "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
 };
 
 const MOCK_CHANNEL = {
@@ -240,7 +240,10 @@ describe("YouTube Integration", () => {
     assert.equal(data.status, "ok");
     assert.equal(data.service, "modern-living-hub-youtube");
     assert.equal(data.youtube_configured, true);
-    assert.deepEqual(data.scopes, ["https://www.googleapis.com/auth/youtube.upload"]);
+    assert.deepEqual(data.scopes, [
+      "https://www.googleapis.com/auth/youtube.upload",
+      "https://www.googleapis.com/auth/youtube.readonly"
+    ]);
     assert.ok(data.privacy_note.includes("audit"), "Privacy note about audit restriction");
   });
 
@@ -251,7 +254,11 @@ describe("YouTube Integration", () => {
     assert.ok(loc.startsWith("https://accounts.google.com/o/oauth2/v2/auth"), "Redirects to Google OAuth");
     const url = new URL(loc);
     assert.equal(url.searchParams.get("client_id"), "yt_test_client_id_12345");
-    assert.equal(url.searchParams.get("scope"), "https://www.googleapis.com/auth/youtube.upload");
+    assert.equal(
+      url.searchParams.get("scope"),
+      "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly",
+      "OAuth URL requests upload + minimal readonly scope for channels.list?mine=true"
+    );
     assert.equal(url.searchParams.get("access_type"), "offline");
     assert.equal(url.searchParams.get("prompt"), "consent");
     assert.ok(url.searchParams.get("state"), "CSRF state present");
@@ -1109,12 +1116,17 @@ describe("YouTube Integration", () => {
 
   it("42. Google channel lookup rejection (403) → 502, valid session NOT destroyed", async () => {
     const _orig = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
     mockGoogleAPIs({
       channel: () => Promise.resolve(new Response(JSON.stringify({
         error: {
           code: 403,
-          message: "YouTube Data API v3 has not been used in project",
-          reason: "forbidden",
+          message: "Request had insufficient authentication scopes.",
+          errors: [{ message: "Insufficient Permission", domain: "global", reason: "insufficientPermissions" }],
           status: "PERMISSION_DENIED"
         }
       }), { status: 403, headers: { "Content-Type": "application/json" } }))
@@ -1129,11 +1141,20 @@ describe("YouTube Integration", () => {
       assert.equal(data.channel, null, "No channel data in 502 body");
       assert.ok(data.error, "Safe error message present");
 
+      const allLogs = _logs.join("\n");
+      assert.ok(allLogs.includes("reason=insufficientPermissions"), "Logs the real error.errors[0].reason");
+      assert.ok(allLogs.includes("message=Request had insufficient authentication scopes."), "Logs the API error message");
+      assert.ok(!allLogs.includes("mock_youtube_access_token"), "Access token never logged");
+      assert.ok(!allLogs.includes("mock_youtube_refresh_token"), "Refresh token never logged");
+      assert.ok(!allLogs.includes(token), "Session token never logged");
+
       const s = await fetch(BASE + "/api/youtube/status", {
         headers: { "Authorization": "Bearer " + token }
       });
       assert.equal((await s.json()).connected, true, "Session intact after channel lookup failure");
     } finally {
+      console.log = _origLog;
+      console.error = _origErr;
       globalThis.fetch = _orig;
     }
   });
@@ -1296,6 +1317,57 @@ describe("YouTube Integration", () => {
     assert.ok(src.includes("/api/youtube/status"), "Reconciliation status call present");
     assert.ok(src.includes("var st = await fetch(BACKEND + '/api/youtube/status'"), "Upload 401 reconciles via status endpoint");
     assert.ok(src.includes("Connection expired"), "Genuine expiry shows reconnect message");
+  });
+
+  it("50. youtube.readonly scope requested; channel 403 payload logged with real reason/message", async () => {
+    const _orig = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+
+    // OAuth URL must request the minimal readonly scope that authorizes
+    // channels.list?mine=true (in addition to the existing upload scope).
+    const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+    const oauthUrl = new URL(r1.headers.get("location"));
+    const scopeParam = oauthUrl.searchParams.get("scope") || "";
+    assert.ok(scopeParam.includes("https://www.googleapis.com/auth/youtube.readonly"), "OAuth URL requests youtube.readonly");
+    assert.ok(scopeParam.includes("https://www.googleapis.com/auth/youtube.upload"), "OAuth URL keeps youtube.upload");
+
+    // Simulate the REAL Google 403 payload (errors[0].reason) for a channel
+    // lookup and verify the backend logs the actual reason + message safely.
+    mockGoogleAPIs({
+      channel: () => Promise.resolve(new Response(JSON.stringify({
+        error: {
+          code: 403,
+          message: "Request had insufficient authentication scopes.",
+          errors: [{ message: "Insufficient Permission", domain: "global", reason: "insufficientPermissions" }],
+          status: "PERMISSION_DENIED"
+        }
+      }), { status: 403, headers: { "Content-Type": "application/json" } }))
+    });
+    try {
+      const token = await completeYouTubeOAuth();
+      const r = await fetch(BASE + "/api/youtube/channel", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal(r.status, 502, "403 surfaced as safe 502");
+      const body = await r.json();
+      assert.equal(body.error, "Channel information is currently unavailable. Your connection is still active.");
+
+      const allLogs = _logs.join("\n");
+      assert.ok(allLogs.includes("reason=insufficientPermissions"), "Logs error.errors[0].reason, not just the HTTP code");
+      assert.ok(allLogs.includes("message=Request had insufficient authentication scopes."), "Logs the API error message");
+      assert.ok(!allLogs.includes("mock_youtube_access_token"), "Access token never logged");
+      assert.ok(!allLogs.includes("mock_youtube_refresh_token"), "Refresh token never logged");
+      assert.ok(!allLogs.includes("yt_test_client_secret"), "Client secret never logged");
+      assert.ok(!allLogs.includes(token), "Session/bearer token never logged");
+    } finally {
+      console.log = _origLog;
+      console.error = _origErr;
+      globalThis.fetch = _orig;
+    }
   });
 
 console.log("\n✅ YouTube tests complete.\n");
