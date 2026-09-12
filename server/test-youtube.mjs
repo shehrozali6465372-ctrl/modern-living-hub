@@ -42,6 +42,14 @@ process.env.YOUTUBE_REDIRECT_URI = "https://modern-living-hub.onrender.com/youtu
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
+
+// Build a self-verifying signed OAuth state, mirroring the server format:
+// <nonce>.<timestamp>.<HMAC-SHA256(SESSION_SECRET, nonce.timestamp)>
+function buildYTState(nonce, timestamp, secret) {
+  const sig = crypto.createHmac("sha256", secret).update(nonce + "." + timestamp).digest("base64url");
+  return nonce + "." + timestamp + "." + sig;
+}
 
 const BASE = "http://localhost:3513";
 
@@ -696,20 +704,19 @@ describe("YouTube Integration", () => {
   });
 
   it("26. Expired OAuth state is rejected", async () => {
-    // Simulate expired state by not sending the cookie at all
-    const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
-    const loc = r1.headers.get("location");
-    const state = new URL(loc).searchParams.get("state");
-    
-    // No cookie = expired/missing
+    // Forge a VALIDLY-SIGNED state but with a timestamp older than the 10-minute window.
+    const expiredNonce = "a".repeat(64);
+    const oldTimestamp = Date.now() - 11 * 60 * 1000; // 11 minutes ago (> 10 min TTL)
+    const expiredState = buildYTState(expiredNonce, oldTimestamp, process.env.SESSION_SECRET);
+
     const r2 = await fetch(
-      BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(state),
+      BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(expiredState),
       { redirect: "manual" }
     );
     assert.equal(r2.status, 302, "Callback should redirect (302)");
     const redirectUrl = r2.headers.get("location");
     assert.ok(redirectUrl.includes("yt_error="), "Should redirect with error");
-    assert.ok(redirectUrl.includes("invalid_state"), "Should mention invalid state for expired cookie");
+    assert.ok(redirectUrl.includes("invalid_state"), "Expired signed state should be rejected");
   });
 
   it("27. Mismatched OAuth state is rejected", async () => {
@@ -811,6 +818,105 @@ describe("YouTube Integration", () => {
       );
       assert.equal(r2b.status, 302);
       assert.ok(r2b.headers.get("location").includes("youtube_connected=1"));
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+
+  it("31. Modified/tampered state is rejected", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+      const loc = r1.headers.get("location");
+      const goodState = new URL(loc).searchParams.get("state");
+
+      // Tamper with the signature (flip last char)
+      const tampered = goodState.slice(0, -1) + (goodState.endsWith("A") ? "B" : "A");
+
+      const r2 = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(tampered),
+        { redirect: "manual" }
+      );
+      assert.equal(r2.status, 302, "Callback should redirect (302)");
+      const redirectUrl = r2.headers.get("location");
+      assert.ok(redirectUrl.includes("yt_error=invalid_state"), "Tampered state should be rejected");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("32. Missing state is rejected", async () => {
+    const r2 = await fetch(
+      BASE + "/youtube/auth/callback?code=test_yt_code",
+      { redirect: "manual" }
+    );
+    assert.equal(r2.status, 302, "Callback should redirect (302)");
+    const redirectUrl = r2.headers.get("location");
+    assert.ok(redirectUrl.includes("yt_error=invalid_state"), "Missing state should be rejected");
+  });
+
+  it("33. Malformed state is rejected", async () => {
+    const badStates = ["just-a-plain-string", "abc.def.ghi.jkl", "nonce.12345"];
+    for (const badState of badStates) {
+      const r = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(badState),
+        { redirect: "manual" }
+      );
+      assert.equal(r.status, 302, "Callback should redirect (302)");
+      const redirectUrl = r.headers.get("location");
+      assert.ok(redirectUrl.includes("yt_error=invalid_state"), "Malformed state should be rejected: " + badState);
+    }
+  });
+
+  it("34. Valid signed state works WITHOUT the mlh.yt.oauth_state cookie", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+      assert.ok(state && state.split(".").length === 3, "State should be nonce.timestamp.signature");
+
+      // NO cookies at all — the signed state alone must be sufficient
+      const r2 = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(state),
+        { redirect: "manual" }
+      );
+      assert.equal(r2.status, 302, "Callback should redirect (302)");
+      const redirectUrl = r2.headers.get("location");
+      assert.ok(redirectUrl.includes("youtube_connected=1"), "Valid signed state without cookie should succeed");
+      assert.ok(redirectUrl.includes("yt_handoff="), "Should return handoff");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("35. Replayed state is rejected (single-use, no cookie needed)", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+      const loc = r1.headers.get("location");
+      const state = new URL(loc).searchParams.get("state");
+
+      // First use: succeeds (no cookie)
+      const r2 = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(state),
+        { redirect: "manual" }
+      );
+      assert.equal(r2.status, 302);
+      assert.ok(r2.headers.get("location").includes("youtube_connected=1"), "First use should succeed");
+
+      // Second use of the SAME state: must be rejected as replay
+      const r3 = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code2&state=" + encodeURIComponent(state),
+        { redirect: "manual" }
+      );
+      assert.equal(r3.status, 302, "Replay callback should redirect");
+      const loc3 = r3.headers.get("location");
+      assert.ok(loc3.includes("yt_error=invalid_state"), "Replayed state should be rejected");
     } finally {
       globalThis.fetch = _orig;
     }

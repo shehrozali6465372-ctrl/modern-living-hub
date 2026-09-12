@@ -76,6 +76,71 @@ export function registerYouTubeRoutes(app, opts) {
     } catch { return null; }
   }
 
+  // ─── Self-verifying OAuth state (HMAC-SHA256 signed, no cookie dependency) ───
+  // Format: <nonce>.<timestamp>.<signature>
+  //   nonce      = crypto.randomBytes(32).toString("hex")
+  //   timestamp  = Date.now()
+  //   signature  = HMAC-SHA256(SESSION_SECRET, "<nonce>.<timestamp>") (base64url)
+  const YT_STATE_TTL_MS = 10 * 60 * 1000; // 10-minute OAuth window
+  const usedStateNonces = new Map(); // nonce -> expiresAt (replay protection, ephemeral)
+
+  function createYTState() {
+    const nonce = crypto.randomBytes(32).toString("hex");
+    const timestamp = Date.now();
+    const signature = crypto
+      .createHmac("sha256", SESSION_SECRET)
+      .update(nonce + "." + timestamp)
+      .digest("base64url");
+    return nonce + "." + timestamp + "." + signature;
+  }
+
+  function validateYTState(state) {
+    // Clean up expired replay entries
+    const now = Date.now();
+    for (const [n, exp] of usedStateNonces) {
+      if (now > exp) usedStateNonces.delete(n);
+    }
+
+    if (!state || typeof state !== "string") {
+      return { ok: false, reason: "missing" };
+    }
+    const parts = state.split(".");
+    if (parts.length !== 3 || !parts[0] || !/^[0-9]+$/.test(parts[1]) || !parts[2]) {
+      return { ok: false, reason: "signature" };
+    }
+    const [nonce, timestampStr, signature] = parts;
+
+    const expected = crypto
+      .createHmac("sha256", SESSION_SECRET)
+      .update(nonce + "." + timestampStr)
+      .digest("base64url");
+
+    const providedBuf = Buffer.from(signature, "utf8");
+    const expectedBuf = Buffer.from(expected, "utf8");
+    if (providedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(providedBuf, expectedBuf)) {
+      return { ok: false, reason: "signature" };
+    }
+
+    const timestamp = Number(timestampStr);
+    if (!Number.isFinite(timestamp)) {
+      return { ok: false, reason: "signature" };
+    }
+    const age = now - timestamp;
+    if (age < 0 || age > YT_STATE_TTL_MS) {
+      return { ok: false, reason: "expired" };
+    }
+
+    if (usedStateNonces.has(nonce)) {
+      return { ok: false, reason: "replay" };
+    }
+
+    return { ok: true, nonce };
+  }
+
+  function consumeYTState(nonce) {
+    usedStateNonces.set(nonce, Date.now() + YT_STATE_TTL_MS);
+  }
+
   function persistYTToken(res, data) {
     const enc = encryptYT(data);
     if (!enc) return;
@@ -285,14 +350,15 @@ export function registerYouTubeRoutes(app, opts) {
 
   // ─── OAuth start ───
   app.get("/youtube/auth", ytGuard, (req, res) => {
-    const state = crypto.randomBytes(32).toString("hex");
+    const state = createYTState(); // self-verifying: nonce.timestamp.hmac(SESSION_SECRET)
     if (!req.session.sessionId) req.session.sessionId = crypto.randomUUID();
     req.session.yt_oauth_state = state;
 
+    // Defense-in-depth only: NOT required for callback validation.
     res.cookie("mlh.yt.oauth_state", state, {
       httpOnly: true, secure: isProduction,
       sameSite: isProduction ? "none" : "lax",
-      maxAge: 10 * 60 * 1000, signed: true,
+      maxAge: YT_STATE_TTL_MS, signed: true,
       path: "/"
     });
 
@@ -317,7 +383,6 @@ export function registerYouTubeRoutes(app, opts) {
   // ─── OAuth callback ───
   app.get("/youtube/auth/callback", ytGuard, async (req, res) => {
     const { code, state, error } = req.query;
-    const cookieState = req.signedCookies["mlh.yt.oauth_state"] || null;
 
     if (error) {
       console.error("YouTube OAuth callback error:", error);
@@ -325,12 +390,15 @@ export function registerYouTubeRoutes(app, opts) {
       return res.redirect(`${FRONTEND_URL}/youtube.html?yt_error=${encodeURIComponent(error)}`);
     }
 
-    // Validate state
-    if (!state || state !== cookieState) {
-      console.error("YouTube OAuth state mismatch");
+    // Validate self-verifying signed state (HMAC + expiry + replay check).
+    // The mlh.yt.oauth_state cookie is NOT required for a valid signed state.
+    const stateResult = validateYTState(state);
+    if (!stateResult.ok) {
+      console.error("YouTube OAuth state validation failed: " + stateResult.reason);
       res.clearCookie("mlh.yt.oauth_state", { path: "/" });
       return res.redirect(`${FRONTEND_URL}/youtube.html?yt_error=invalid_state`);
     }
+    consumeYTState(stateResult.nonce); // single-use: prevent replay
 
     if (!code) {
       return res.redirect(`${FRONTEND_URL}/youtube.html?yt_error=no_code`);
