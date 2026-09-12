@@ -215,16 +215,18 @@
 
     function renderChannelInfo(data) {
         if (!channelInfo) return;
+        // Data may come as {channel: {...}} from backend, or flat {id, title, ...} for backward compat
+        var ch = data.channel || data;
         var html = '<div class="yt-channel-avatar">';
-        if (data.thumbnail_url) {
-            html += '<img src="' + escapeHtml(data.thumbnail_url) + '" alt="Channel thumbnail" width="64" height="64">';
+        if (ch.thumbnail) {
+            html += '<img src="' + escapeHtml(ch.thumbnail) + '" alt="Channel thumbnail" width="64" height="64">';
         } else {
-            html += '<span class="yt-channel-placeholder">' + escapeHtml((data.title || 'C')[0].toUpperCase()) + '</span>';
+            html += '<span class="yt-channel-placeholder">' + escapeHtml((ch.title || 'C')[0].toUpperCase()) + '</span>';
         }
         html += '</div>';
         html += '<div class="yt-channel-meta">';
-        html += '<p class="yt-channel-name"><strong>' + (data.title ? escapeHtml(data.title) : 'My Channel') + '</strong></p>';
-        if (data.id) html += '<p class="yt-channel-id">Channel ID: <code>' + escapeHtml(data.id) + '</code></p>';
+        html += '<p class="yt-channel-name"><strong>' + escapeHtml(ch.title || 'My Channel') + '</strong></p>';
+        if (ch.id) html += '<p class="yt-channel-id">Channel ID: <code>' + escapeHtml(ch.id) + '</code></p>';
         html += '</div>';
         channelInfo.innerHTML = '<div class="yt-channel-detail">' + html + '</div>';
     }
