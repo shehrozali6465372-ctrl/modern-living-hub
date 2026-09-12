@@ -1188,4 +1188,114 @@ describe("YouTube Integration", () => {
     }
   });
 
+  // ─── Regression: YouTube upload "Not connected" state ───
+
+  it("46. Upload is authenticated via encrypted-cookie fallback after in-memory reset", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const flow = await performYouTubeFlowWithCookies();
+      assert.ok(flow.callbackCookies["mlh.ytoken"], "mlh.ytoken encrypted cookie available");
+
+      const cookieHeader = "mlh.ytoken=" + flow.callbackCookies["mlh.ytoken"];
+      const uploadBody = new FormData();
+      uploadBody.append("video", new Blob([Buffer.alloc(1024)]), "test.mp4");
+      uploadBody.append("title", "Test Upload");
+      uploadBody.append("description", "Test description");
+      uploadBody.append("tags", "test, upload");
+      uploadBody.append("category", "22");
+      uploadBody.append("privacyStatus", "private");
+      uploadBody.append("madeForKids", "false");
+
+      // No bearer token, no in-memory session — the encrypted cookie alone
+      // must authenticate the upload (same fallback /api/youtube/status uses).
+      const r = await fetch(BASE + "/api/youtube/upload", {
+        method: "POST",
+        headers: { Cookie: cookieHeader },
+        body: uploadBody
+      });
+      assert.equal(r.status, 200, "Cookie-only upload request is authenticated");
+      const data = await r.json();
+      assert.equal(data.success, true);
+      assert.ok(data.video_id, "Video id returned");
+      assert.equal(data.privacy_status, "private", "Private upload behavior preserved");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("47. Missing/invalid session → upload returns not-connected (401)", async () => {
+    const uploadBody = new FormData();
+    uploadBody.append("video", new Blob([Buffer.alloc(1024)]), "test.mp4");
+    uploadBody.append("title", "Test Upload");
+    uploadBody.append("privacyStatus", "private");
+
+    const bogus = "bogus_session_token_" + crypto.randomBytes(8).toString("hex");
+    const r1 = await fetch(BASE + "/api/youtube/upload", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + bogus },
+      body: uploadBody
+    });
+    assert.equal(r1.status, 401, "Expired/invalid bearer → 401");
+    const d1 = await r1.json();
+    assert.equal(d1.error, "Not connected to YouTube.");
+    assert.ok(!JSON.stringify(d1).includes("mock_youtube_access_token"), "No token in 401 body");
+
+    const r2 = await fetch(BASE + "/api/youtube/upload", {
+      method: "POST",
+      body: uploadBody
+    });
+    assert.equal(r2.status, 401, "Missing session → 401");
+  });
+
+  it("48. Channel-info 403 does NOT destroy a valid upload session", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs({
+      channel: () => Promise.resolve(new Response(JSON.stringify({
+        error: {
+          code: 403,
+          message: "YouTube Data API v3 has not been used in project",
+          reason: "forbidden",
+          status: "PERMISSION_DENIED"
+        }
+      }), { status: 403, headers: { "Content-Type": "application/json" } }))
+    });
+    try {
+      const token = await completeYouTubeOAuth();
+      assert.ok(token, "Session token obtained");
+
+      const ch = await fetch(BASE + "/api/youtube/channel", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal(ch.status, 502, "Channel-info 403 mapped to 502, not 401/403");
+
+      // The SAME valid session must still upload successfully.
+      const uploadBody = new FormData();
+      uploadBody.append("video", new Blob([Buffer.alloc(1024)]), "test.mp4");
+      uploadBody.append("title", "Test Upload");
+      uploadBody.append("privacyStatus", "private");
+      const r = await fetch(BASE + "/api/youtube/upload", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token },
+        body: uploadBody
+      });
+      assert.equal(r.status, 200, "Upload succeeds after channel-info 403");
+
+      const s = await fetch(BASE + "/api/youtube/status", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal((await s.json()).connected, true, "Session still connected");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("49. Frontend upload 401 reconciles with status before clearing the session", async () => {
+    const src = readFileSync(new URL("../assets/js/youtube.js", import.meta.url), "utf8");
+    assert.ok(src.includes("if (res.status === 401) {"), "Upload handler 401 branch present");
+    assert.ok(src.includes("/api/youtube/status"), "Reconciliation status call present");
+    assert.ok(src.includes("var st = await fetch(BACKEND + '/api/youtube/status'"), "Upload 401 reconciles via status endpoint");
+    assert.ok(src.includes("Connection expired"), "Genuine expiry shows reconnect message");
+  });
+
 console.log("\n✅ YouTube tests complete.\n");

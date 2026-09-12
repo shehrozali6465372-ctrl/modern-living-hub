@@ -231,6 +231,10 @@ export function registerYouTubeRoutes(app, opts) {
     const cookieTokens = readYTToken(req);
     if (cookieTokens && cookieTokens.access_token) {
       const sid = req.session?.sessionId || null;
+      // Rehydrate the in-memory store when a sessionId is available so
+      // upload/channel/video-status requests stay authenticated after Render
+      // hibernation cleared the Maps (mirrors the Pinterest cookie fallback).
+      if (sid) storeYTTokens(sid, cookieTokens);
       return { access_token: cookieTokens.access_token, sessionId: sid, refresh_token: cookieTokens.refresh_token, expires_at: cookieTokens.expires_at };
     }
     return null;

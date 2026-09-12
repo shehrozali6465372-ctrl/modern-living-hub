@@ -356,6 +356,29 @@
                 var data = await res.json();
 
                 if (!res.ok) {
+                    if (res.status === 401) {
+                        // Genuine 401: the backend could not resolve ANY valid
+                        // YouTube session (bearer or encrypted cookie). Reconcile
+                        // with /api/youtube/status before clearing the session so
+                        // transient/mixed states never destroy a valid connection.
+                        try {
+                            var st = await fetch(BACKEND + '/api/youtube/status', {
+                                headers: authHeaders(),
+                                credentials: 'include'
+                            });
+                            var sd = await st.json();
+                            if (!sd.connected) {
+                                sessionToken = null;
+                                localStorage.removeItem(SESSION_TOKEN_KEY);
+                                showDisconnectedUI();
+                                showErrorBanner('Connection expired — reconnect YouTube.');
+                                return;
+                            }
+                        } catch (_e2) { /* keep connected; fall through to error below */ }
+                        setUploadMessage('\u274C ' + (data.error || 'Upload failed.'), 'error');
+                        setUploadButtonBusy(false);
+                        return;
+                    }
                     setUploadMessage('\u274C ' + (data.error || 'Upload failed.'), 'error');
                     setUploadButtonBusy(false);
                     return;
