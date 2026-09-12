@@ -161,8 +161,8 @@
         if (params.get('youtube_connected') === '1' && handoff) {
             // Immediately clean the URL so refresh doesn't re-consume the handoff.
             window.history.replaceState({}, '', window.location.pathname);
-            await completeYTHandoff(handoff);
-            return;
+            var completed = await completeYTHandoff(handoff);
+            return completed; // true = handoff was processed; do not race with checkStatus
         }
 
         if (error) {
@@ -170,6 +170,7 @@
             showErrorBanner(decodeURIComponent(error));
             showDisconnectedUI();
         }
+        return false;
     }
 
     // ─── Load channel info ───
@@ -189,8 +190,9 @@
                 credentials: 'include'
             });
 
-            if (res.status === 401 || res.status === 403) {
-                // Session expired — clear YouTube session and show disconnected
+            if (res.status === 401) {
+                // Genuine session expiry (invalid/expired bearer) — clear ONLY
+                // the YouTube session token and show disconnected state.
                 sessionToken = null;
                 localStorage.removeItem(SESSION_TOKEN_KEY);
                 showDisconnectedUI();
@@ -198,10 +200,20 @@
                 return;
             }
 
+            if (res.status === 403) {
+                // Permission/scope rejection from Google for channel data. The
+                // session itself is valid — DO NOT clear the token or disconnect.
+                channelInfo.innerHTML = '<p class="yt-channel-error">Channel information is not available for this account.</p>';
+                showErrorBanner('Channel information is currently unavailable. Your connection is still active.');
+                return;
+            }
+
             if (!res.ok) {
-                var errData = await res.json();
+                // Other transient/server errors — keep the Connected state visible.
+                var errData = {};
+                try { errData = await res.json(); } catch (_e) {}
                 channelInfo.innerHTML = '<p class="yt-channel-error">Could not load channel info.</p>';
-                showErrorBanner(errData.error || 'Could not load channel information.');
+                showErrorBanner(errData.error || 'Could not load channel information. Your connection is still active.');
                 return;
             }
 
@@ -480,9 +492,14 @@
         }
     }
 
-    // Entry point: handle handoff first if present, then status check.
+    // Entry point: handle handoff first if present, then only run a status
+    // check when there was no handoff (i.e. plain page load/refresh with an
+    // existing session token). This prevents a race where checkStatus() could
+    // clear a freshly-issued session token before the handoff completes.
     (async function init() {
-        await handleUrlParams();
-        await checkStatus();
+        var hadHandoff = await handleUrlParams();
+        if (!hadHandoff) {
+            await checkStatus();
+        }
     })();
 })();

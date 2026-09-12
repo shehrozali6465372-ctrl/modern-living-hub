@@ -207,14 +207,31 @@ export function registerYouTubeRoutes(app, opts) {
   }
 
   // ─── Token resolution ───
+  // Resolves a request's YouTube OAuth token. Primary: Authorization Bearer
+  // session token (cross-site safe). Fallback: encrypted mlh.ytoken cookie so
+  // Render hibernation/restart does not break an otherwise-valid connection.
   function getYTUserToken(req) {
     const auth = req.headers.authorization;
     if (auth && auth.startsWith("Bearer ")) {
       const sid = resolveYTSessionToken(auth.slice(7));
       if (sid) {
         const yt = getYTTokens(sid);
-        if (yt && yt.access_token) return { access_token: yt.access_token, sessionId: sid };
+        if (yt && yt.access_token) {
+          return { access_token: yt.access_token, sessionId: sid, refresh_token: yt.refresh_token, expires_at: yt.expires_at };
+        }
+        // In-memory store cleared (hibernation) — try encrypted cookie and rehydrate.
+        const cookieTokens = readYTToken(req);
+        if (cookieTokens && cookieTokens.access_token) {
+          storeYTTokens(sid, cookieTokens);
+          return { access_token: cookieTokens.access_token, sessionId: sid, refresh_token: cookieTokens.refresh_token, expires_at: cookieTokens.expires_at };
+        }
       }
+    }
+    // Fallback: cookie-only authentication (session cookie still valid).
+    const cookieTokens = readYTToken(req);
+    if (cookieTokens && cookieTokens.access_token) {
+      const sid = req.session?.sessionId || null;
+      return { access_token: cookieTokens.access_token, sessionId: sid, refresh_token: cookieTokens.refresh_token, expires_at: cookieTokens.expires_at };
     }
     return null;
   }
@@ -225,7 +242,7 @@ export function registerYouTubeRoutes(app, opts) {
       const sid = resolveYTSessionToken(auth.slice(7));
       if (sid) return sid;
     }
-    return null;
+    return req.session?.sessionId || null;
   }
 
   function getYTFullTokens(req) {
@@ -272,22 +289,22 @@ export function registerYouTubeRoutes(app, opts) {
   }
 
   // ─── Authenticated fetch with auto-refresh ───
-  async function ytFetch(url, opts, sessionId) {
-    const tokenData = sessionId ? getYTTokens(sessionId) : null;
+  async function ytFetch(url, opts, tokenData) {
     if (!tokenData || !tokenData.access_token) {
       return { ok: false, status: 401, json: () => ({ error: { code: 401, message: "Not authenticated" } }) };
     }
+    const sessionId = tokenData.sessionId || null;
+    const refreshToken = tokenData.refresh_token;
 
     // Check expiry — refresh proactively if within 5 minutes
     if (tokenData.expires_at && Date.now() > tokenData.expires_at - 5 * 60 * 1000) {
-      if (tokenData.refresh_token) {
-        const newToken = await refreshAccessToken(sessionId, tokenData.refresh_token);
+      if (refreshToken) {
+        const newToken = await refreshAccessToken(sessionId, refreshToken);
         if (newToken) {
           opts.headers = { ...opts.headers, Authorization: "Bearer " + newToken };
           const r = await fetch(url, opts);
-          if (r.status === 401 && tokenData.refresh_token) {
-            // Retry with refreshed token
-            const rt = await refreshAccessToken(sessionId, tokenData.refresh_token);
+          if (r.status === 401 && refreshToken) {
+            const rt = await refreshAccessToken(sessionId, refreshToken);
             if (rt) {
               opts.headers = { ...opts.headers, Authorization: "Bearer " + rt };
               return fetch(url, opts);
@@ -300,8 +317,8 @@ export function registerYouTubeRoutes(app, opts) {
     }
 
     const r = await fetch(url, opts);
-    if (r.status === 401 && tokenData.refresh_token) {
-      const newToken = await refreshAccessToken(sessionId, tokenData.refresh_token);
+    if (r.status === 401 && refreshToken) {
+      const newToken = await refreshAccessToken(sessionId, refreshToken);
       if (newToken) {
         opts.headers = { ...opts.headers, Authorization: "Bearer " + newToken };
         return fetch(url, opts);
@@ -437,7 +454,7 @@ export function registerYouTubeRoutes(app, opts) {
         return res.redirect(`${FRONTEND_URL}/youtube.html?yt_error=no_access_token`);
       }
 
-      // Retrieve channel info
+      // Retrieve channel info (channels.list?mine=true with the OAuth token)
       let channelInfo = null;
       try {
         const cr = await fetch(
@@ -445,7 +462,10 @@ export function registerYouTubeRoutes(app, opts) {
           { headers: { Authorization: "Bearer " + accessToken } }
         );
         const cdata = await cr.json().catch(() => ({}));
-        if (cdata.items && cdata.items.length > 0) {
+        if (!cr.ok) {
+          const reason = cdata?.error?.reason || cdata?.error?.code || String(cr.status);
+          console.error("YouTube channel lookup (callback): status=" + cr.status + " reason=" + reason + " stage=callback");
+        } else if (cdata.items && cdata.items.length > 0) {
           const ch = cdata.items[0];
           channelInfo = {
             id: ch.id,
@@ -454,9 +474,10 @@ export function registerYouTubeRoutes(app, opts) {
             thumbnail: ch.snippet?.thumbnails?.default?.url || "",
             uploads_playlist_id: ch.contentDetails?.relatedPlaylists?.uploads || ""
           };
+          console.log("YouTube channel lookup (callback): success channel=" + ch.id);
         }
       } catch (err) {
-        console.error("YouTube channel fetch error:", err.message);
+        console.error("YouTube channel lookup (callback): network error stage=callback");
       }
 
       // Store tokens server-side
@@ -471,6 +492,8 @@ export function registerYouTubeRoutes(app, opts) {
         connected_at: Date.now()
       };
       storeYTTokens(sessionId, tokenData);
+      console.log("YouTube OAuth callback: token exchange succeeded");
+      console.log("YouTube OAuth callback: token stored");
       persistYTToken(res, tokenData);
 
       // Clear the OAuth state cookie after successful validation (consumed)
@@ -478,8 +501,7 @@ export function registerYouTubeRoutes(app, opts) {
 
       // Create one-time handoff code
       const handoffCode = createYTHandoff(sessionId);
-
-      console.log("YouTube OAuth success: channel=" + (channelInfo?.title || "unknown"));
+      console.log("YouTube OAuth callback: handoff created");
 
       // Redirect to frontend with handoff
       res.redirect(`${FRONTEND_URL}/youtube.html?youtube_connected=1&yt_handoff=${handoffCode}`);
@@ -499,8 +521,10 @@ export function registerYouTubeRoutes(app, opts) {
 
     const entry = consumeYTHandoff(handoff);
     if (!entry) {
+      console.error("YouTube handoff: invalid or expired");
       return res.status(400).json({ error: "Invalid or expired handoff code." });
     }
+    console.log("YouTube handoff: consumed");
 
     const { sessionId } = entry;
     const tokens = getYTTokens(sessionId);
@@ -509,6 +533,7 @@ export function registerYouTubeRoutes(app, opts) {
     }
 
     const sessionToken = createYTSessionToken(sessionId);
+    console.log("YouTube handoff: session created");
     res.json({ connected: true, session_token: sessionToken });
   });
 
@@ -518,6 +543,7 @@ export function registerYouTubeRoutes(app, opts) {
     const yt = (sid ? getYTTokens(sid) : null) || readYTToken(req);
     const connected = Boolean(yt && yt.access_token);
     if (!connected) return res.json({ connected: false });
+    console.log("YouTube status: authenticated");
     res.json({
       connected: true,
       channel: yt.channel || null,
@@ -535,18 +561,32 @@ export function registerYouTubeRoutes(app, opts) {
       {
         headers: { Authorization: "Bearer " + tokenData.access_token }
       },
-      tokenData.sessionId
+      tokenData
     );
 
     const raw = await r.json().catch(() => ({}));
+
     if (!r.ok) {
-      return res.status(r.status).json({ error: raw?.error?.message || "Failed to fetch channel." });
+      // The authenticated session is valid; the YouTube channel lookup itself
+      // was rejected (e.g. scope restriction or transient API error). Surface a
+      // safe 502 so the frontend keeps the Connected state instead of treating
+      // this as a session failure (401/403 would clear the valid session token).
+      const reason = raw?.error?.reason || raw?.error?.code || String(r.status);
+      console.error("YouTube channel lookup failed: status=" + r.status + " reason=" + reason + " stage=channel");
+      return res.status(502).json({
+        error: "Channel information is currently unavailable. Your connection is still active.",
+        channel: null
+      });
     }
 
     const ch = raw.items?.[0];
     if (!ch) {
-      return res.status(404).json({ error: "No YouTube channel found." });
+      return res.status(502).json({
+        error: "No YouTube channel found.",
+        channel: null
+      });
     }
+    console.log("YouTube channel lookup: success channel=" + ch.id);
 
     res.json({
       channel: {
@@ -631,7 +671,7 @@ export function registerYouTubeRoutes(app, opts) {
           },
           body
         },
-        tokenData.sessionId
+        tokenData
       );
 
       const raw = await r.json().catch(() => ({}));
@@ -672,7 +712,7 @@ export function registerYouTubeRoutes(app, opts) {
       {
         headers: { Authorization: "Bearer " + tokenData.access_token }
       },
-      tokenData.sessionId
+      tokenData
     );
 
     const raw = await r.json().catch(() => ({}));

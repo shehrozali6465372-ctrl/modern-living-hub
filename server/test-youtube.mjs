@@ -43,6 +43,7 @@ process.env.YOUTUBE_REDIRECT_URI = "https://modern-living-hub.onrender.com/youtu
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 
 // Build a self-verifying signed OAuth state, mirroring the server format:
 // <nonce>.<timestamp>.<HMAC-SHA256(SESSION_SECRET, nonce.timestamp)>
@@ -194,6 +195,41 @@ async function completeYouTubeOAuth() {
   assert.equal(data.connected, true);
   assert.ok(data.session_token, "Session token returned");
   return data.session_token;
+}
+
+async function performYouTubeFlowWithCookies() {
+  const _orig = globalThis.fetch;
+  mockGoogleAPIs();
+  try {
+    const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+    const loc = r1.headers.get("location");
+    const state = new URL(loc).searchParams.get("state");
+    const cookies = parseCookies(r1.headers.getSetCookie());
+
+    const r2 = await fetch(
+      BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(state),
+      { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+    );
+    assert.equal(r2.status, 302, "Callback should redirect (302)");
+    const redirectUrl = r2.headers.get("location");
+    assert.ok(redirectUrl.includes("youtube_connected=1"), "Should have youtube_connected=1");
+    assert.ok(redirectUrl.includes("yt_handoff="), "Should have yt_handoff");
+
+    const handoffCode = new URL(redirectUrl).searchParams.get("yt_handoff");
+    const callbackCookies = parseCookies(r2.headers.getSetCookie());
+
+    const r3 = await fetch(BASE + "/api/youtube/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ handoff: handoffCode })
+    });
+    const data = await r3.json();
+    assert.equal(data.connected, true);
+    assert.ok(data.session_token, "Session token returned");
+    return { sessionToken: data.session_token, callbackCookies };
+  } finally {
+    globalThis.fetch = _orig;
+  }
 }
 
 describe("YouTube Integration", () => {
@@ -403,9 +439,13 @@ describe("YouTube Integration", () => {
     mockGoogleAPIs();
     try {
       await completeYouTubeOAuth();
-      const tokenLogs = _logs.filter(l => l.includes("YouTube OAuth success"));
-      assert.ok(tokenLogs.length >= 1, "Should log YouTube OAuth success");
-      assert.ok(tokenLogs[0].includes("channel="), "Should log channel name");
+      const allLogs = _logs.join("\n");
+      assert.ok(allLogs.includes("YouTube OAuth callback: token exchange succeeded"), "token exchange succeeded log");
+      assert.ok(allLogs.includes("YouTube OAuth callback: token stored"), "token stored log");
+      assert.ok(allLogs.includes("YouTube OAuth callback: handoff created"), "handoff created log");
+      assert.ok(allLogs.includes("YouTube channel lookup (callback): success channel=UC_mock_channel_id_123"), "channel id in callback log");
+      assert.ok(!allLogs.includes("yt_test_client_secret"), "Client secret must not appear in logs");
+      assert.ok(!allLogs.includes("mock_youtube_access_token"), "Access token must not appear in logs");
     } finally {
       console.log = _origLog;
       console.error = _origErr;
@@ -922,5 +962,230 @@ describe("YouTube Integration", () => {
     }
   });
 
+  // ─── Regression: post-OAuth connection loop (production bug) ───
+
+  it("36. Callback lifecycle: token stored, handoff created, channel resolved", async () => {
+    const _orig = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+    mockGoogleAPIs();
+    try {
+      await completeYouTubeOAuth();
+      const allLogs = _logs.join("\n");
+      assert.ok(allLogs.includes("YouTube OAuth callback: token exchange succeeded"), "token exchange succeeded log");
+      assert.ok(allLogs.includes("YouTube OAuth callback: token stored"), "token stored log");
+      assert.ok(allLogs.includes("YouTube OAuth callback: handoff created"), "handoff created log");
+      assert.ok(allLogs.includes("YouTube channel lookup (callback): success channel=UC_mock_channel_id_123"), "channel id in callback log");
+    } finally {
+      console.log = _origLog;
+      console.error = _origErr;
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("37. Handoff is single-use: consumed exactly once, replay rejected", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const r1 = await fetch(BASE + "/youtube/auth", { redirect: "manual" });
+      const state = new URL(r1.headers.get("location")).searchParams.get("state");
+      const cookies = parseCookies(r1.headers.getSetCookie());
+      const r2 = await fetch(
+        BASE + "/youtube/auth/callback?code=test_yt_code&state=" + encodeURIComponent(state),
+        { redirect: "manual", headers: { Cookie: Object.entries(cookies).map(([k,v]) => k+"="+v).join("; ") } }
+      );
+      assert.equal(r2.status, 302);
+      const handoffCode = new URL(r2.headers.get("location")).searchParams.get("yt_handoff");
+      assert.ok(handoffCode, "Handoff code present");
+
+      const first = await fetch(BASE + "/api/youtube/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handoff: handoffCode })
+      });
+      const firstData = await first.json();
+      assert.equal(firstData.connected, true, "First consume succeeds");
+      assert.ok(firstData.session_token, "Session token created on first consume");
+
+      const second = await fetch(BASE + "/api/youtube/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handoff: handoffCode })
+      });
+      assert.equal(second.status, 400, "Replayed handoff rejected");
+      assert.ok((await second.json()).error, "Replay error message present");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("38. Status connected=true immediately after handoff; persists on refresh", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const token = await completeYouTubeOAuth();
+      assert.ok(token, "Session token obtained");
+
+      const r1 = await fetch(BASE + "/api/youtube/status", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const s1 = await r1.json();
+      assert.equal(s1.connected, true, "Status connected immediately after handoff");
+      assert.equal(s1.channel.id, "UC_mock_channel_id_123", "Channel id present in status");
+
+      const r2 = await fetch(BASE + "/api/youtube/status", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal((await r2.json()).connected, true, "Still connected on refresh");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("39. Channel API works with Bearer session token; contract matches frontend", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const token = await completeYouTubeOAuth();
+      const r = await fetch(BASE + "/api/youtube/channel", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal(r.status, 200);
+      const data = await r.json();
+      assert.ok(data.channel, "Response wrapped in {channel: ...}");
+      assert.equal(data.channel.id, "UC_mock_channel_id_123");
+      assert.equal(data.channel.title, "Test YouTube Channel");
+      assert.equal(data.channel.description, "A test channel for Modern Living Hub");
+      assert.equal(data.channel.thumbnail, "https://yt3.ggpht.com/a/default-user.jpg");
+      assert.equal(data.channel.uploads_playlist_id, "UU_mock_channel_id_123");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("40. Stale/invalid session token → 401 for YouTube only", async () => {
+    const bogus = "bogus_session_token_" + crypto.randomBytes(8).toString("hex");
+    const r1 = await fetch(BASE + "/api/youtube/channel", {
+      headers: { "Authorization": "Bearer " + bogus }
+    });
+    assert.equal(r1.status, 401, "Invalid bearer → 401");
+
+    const r2 = await fetch(BASE + "/api/youtube/status", {
+      headers: { "Authorization": "Bearer " + bogus }
+    });
+    const s2 = await r2.json();
+    assert.equal(s2.connected, false, "Invalid bearer → disconnected");
+    assert.ok(!JSON.stringify(s2).includes("access_token"), "No token in response");
+  });
+
+  it("41. Encrypted cookie fallback keeps connection after in-memory store reset (Render restart)", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const flow = await performYouTubeFlowWithCookies();
+      assert.ok(flow.sessionToken, "Session token created");
+      assert.ok(flow.callbackCookies["mlh.ytoken"], "mlh.ytoken encrypted cookie set on callback");
+
+      const cookieHeader = "mlh.ytoken=" + flow.callbackCookies["mlh.ytoken"];
+      const r1 = await fetch(BASE + "/api/youtube/status", {
+        headers: { Cookie: cookieHeader }
+      });
+      const s1 = await r1.json();
+      assert.equal(s1.connected, true, "Cookie-only status remains connected");
+
+      const r2 = await fetch(BASE + "/api/youtube/channel", {
+        headers: { Cookie: cookieHeader }
+      });
+      assert.equal(r2.status, 200, "Cookie-only channel request authenticated");
+      const ch = await r2.json();
+      assert.equal(ch.channel.id, "UC_mock_channel_id_123");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("42. Google channel lookup rejection (403) → 502, valid session NOT destroyed", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs({
+      channel: () => Promise.resolve(new Response(JSON.stringify({
+        error: {
+          code: 403,
+          message: "YouTube Data API v3 has not been used in project",
+          reason: "forbidden",
+          status: "PERMISSION_DENIED"
+        }
+      }), { status: 403, headers: { "Content-Type": "application/json" } }))
+    });
+    try {
+      const token = await completeYouTubeOAuth();
+      const r = await fetch(BASE + "/api/youtube/channel", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal(r.status, 502, "Channel lookup rejection surfaced as 502");
+      const data = await r.json();
+      assert.equal(data.channel, null, "No channel data in 502 body");
+      assert.ok(data.error, "Safe error message present");
+
+      const s = await fetch(BASE + "/api/youtube/status", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal((await s.json()).connected, true, "Session intact after channel lookup failure");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("43. Frontend keeps Connected state and token on non-401 channel errors", async () => {
+    const src = readFileSync(new URL("../assets/js/youtube.js", import.meta.url), "utf8");
+    assert.ok(src.includes("if (res.status === 401) {"), "401 handled separately (clears token)");
+    assert.ok(src.includes("if (res.status === 403) {"), "403 handled separately (keeps token)");
+    assert.ok(src.includes("if (!res.ok) {"), "Other errors handled without disconnecting");
+    assert.ok(!src.includes("if (res.status === 401 || res.status === 403) {"), "401/403 no longer share disconnect branch");
+    assert.ok(src.includes("Connection expired"), "401 path shows reconnect message");
+  });
+
+  it("44. Frontend init does not race handoff against checkStatus", async () => {
+    const src = readFileSync(new URL("../assets/js/youtube.js", import.meta.url), "utf8");
+    assert.ok(src.includes("var hadHandoff = await handleUrlParams();"), "init captures handoff result");
+    assert.ok(src.includes("if (!hadHandoff) {"), "checkStatus skipped when handoff present");
+    assert.ok(src.includes("await checkStatus();"), "checkStatus still runs on plain page load");
+  });
+
+  it("45. Handoff/session lifecycle logs contain no credentials", async () => {
+    const _orig = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+    mockGoogleAPIs();
+    try {
+      const token = await completeYouTubeOAuth();
+      await fetch(BASE + "/api/youtube/status", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      const allLogs = _logs.join("\n");
+      const forbidden = [
+        "mock_youtube_access_token",
+        "mock_youtube_refresh_token",
+        "yt_test_client_secret",
+        "test_yt_code",
+        token
+      ];
+      for (const secret of forbidden) {
+        assert.ok(!allLogs.includes(secret), "Logs must not contain: " + secret);
+      }
+      assert.ok(allLogs.includes("YouTube handoff: consumed"), "handoff consumed logged");
+      assert.ok(allLogs.includes("YouTube handoff: session created"), "session created logged");
+      assert.ok(allLogs.includes("YouTube status: authenticated"), "status authenticated logged");
+    } finally {
+      console.log = _origLog;
+      console.error = _origErr;
+      globalThis.fetch = _orig;
+    }
+  });
 
 console.log("\n✅ YouTube tests complete.\n");
