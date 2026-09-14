@@ -325,12 +325,17 @@
 
             var file = videoFile ? videoFile.files[0] : null;
             var title = document.getElementById('video-title').value.trim();
+            var description = document.getElementById('video-description').value.trim();
             if (!file) {
                 setUploadMessage('\u274C Please select a video file.', 'error');
                 return;
             }
             if (!title) {
                 setUploadMessage('\u274C Title is required.', 'error');
+                return;
+            }
+            if (!description) {
+                setUploadMessage('\u274C Description is required.', 'error');
                 return;
             }
 
@@ -341,7 +346,7 @@
                 var formData = new FormData();
                 formData.append('video', file);
                 formData.append('title', title);
-                formData.append('description', document.getElementById('video-description').value.trim());
+                formData.append('description', description);
                 formData.append('tags', document.getElementById('video-tags').value.trim());
                 formData.append('category', document.getElementById('video-category').value);
                 formData.append('privacyStatus', document.getElementById('video-privacy').value);

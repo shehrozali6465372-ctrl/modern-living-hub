@@ -645,6 +645,10 @@ export function registerYouTubeRoutes(app, opts) {
       return res.status(400).json({ error: "Invalid privacyStatus. Must be: private, unlisted, or public." });
     }
 
+    if (!description) {
+      return res.status(400).json({ error: "Description is required." });
+    }
+
     if (privacyStatus === "public") {
       console.log("YouTube upload: public privacy requested — may be restricted for unverified projects");
     }
@@ -758,8 +762,35 @@ export function registerYouTubeRoutes(app, opts) {
   });
 
   // ─── Disconnect ───
-  app.post("/api/youtube/disconnect", (req, res) => {
+  app.post("/api/youtube/disconnect", async (req, res) => {
     const sid = getYTSessionId(req);
+
+    // Resolve the CURRENTLY stored YouTube OAuth token BEFORE deleting anything
+    // so we can ask Google to revoke it. Never log the token value.
+    const tokenData = (sid ? getYTTokens(sid) : null) || getYTUserToken(req);
+    const revokeToken = (tokenData && (tokenData.refresh_token || tokenData.access_token)) || null;
+
+    if (revokeToken) {
+      try {
+        const rr = await fetch(GOOGLE_REVOKE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ token: revokeToken }).toString()
+        });
+        // 200 = revoked. 400/404 = token already invalid/revoked — both are
+        // acceptable outcomes; local cleanup proceeds either way.
+        if (rr.ok || rr.status === 400 || rr.status === 404) {
+          console.log("YouTube disconnect: Google revoke request completed status=" + rr.status);
+        } else {
+          console.error("YouTube disconnect: Google revoke request returned status=" + rr.status);
+        }
+      } catch (err) {
+        // Continue with local cleanup even if the network call fails.
+        console.error("YouTube disconnect: Google revoke request failed; continuing local cleanup");
+      }
+    }
+
+    // Local cleanup — only after the revoke attempt.
     if (sid) deleteYTTokens(sid);
     delete req.session?.yt_oauth_state;
     clearYTToken(res);

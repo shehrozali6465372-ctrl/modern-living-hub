@@ -131,6 +131,14 @@ function mockGoogleAPIs(handlers) {
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
     }
 
+    // Google OAuth revoke (called by /api/youtube/disconnect)
+    if (urlStr.includes("oauth2.googleapis.com/revoke")) {
+      if (handlers && handlers.revoke) {
+        return handlers.revoke(opts);
+      }
+      return Promise.resolve(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+
     // Channel info
     if (urlStr.includes("googleapis.com/youtube/v3/channels")) {
       if (handlers && handlers.channel) {
@@ -1294,6 +1302,7 @@ describe("YouTube Integration", () => {
       const uploadBody = new FormData();
       uploadBody.append("video", new Blob([Buffer.alloc(1024)]), "test.mp4");
       uploadBody.append("title", "Test Upload");
+      uploadBody.append("description", "Test description");
       uploadBody.append("privacyStatus", "private");
       const r = await fetch(BASE + "/api/youtube/upload", {
         method: "POST",
@@ -1368,6 +1377,152 @@ describe("YouTube Integration", () => {
       console.error = _origErr;
       globalThis.fetch = _orig;
     }
+  });
+
+  // ─── Regression: YouTube API compliance — description required + revoke on disconnect ───
+
+  it("51. Empty description rejected (400); non-empty description accepted", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs();
+    try {
+      const token = await completeYouTubeOAuth();
+
+      const empty = new FormData();
+      empty.append("video", new Blob([Buffer.alloc(1024)]), "test.mp4");
+      empty.append("title", "Test Upload");
+      empty.append("description", "   ");
+      empty.append("privacyStatus", "private");
+      const r1 = await fetch(BASE + "/api/youtube/upload", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token },
+        body: empty
+      });
+      assert.equal(r1.status, 400, "Empty/whitespace description → 400");
+      assert.equal((await r1.json()).error, "Description is required.");
+
+      const ok = new FormData();
+      ok.append("video", new Blob([Buffer.alloc(1024)]), "test.mp4");
+      ok.append("title", "Test Upload");
+      ok.append("description", "Non-empty description");
+      ok.append("privacyStatus", "private");
+      const r2 = await fetch(BASE + "/api/youtube/upload", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token },
+        body: ok
+      });
+      assert.equal(r2.status, 200, "Non-empty description accepted");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("52. Disconnect revokes Google OAuth and clears local YouTube credentials", async () => {
+    const _orig = globalThis.fetch;
+    const _logs = [];
+    const _origLog = console.log;
+    const _origErr = console.error;
+    console.log = (...args) => _logs.push(args.join(" "));
+    console.error = (...args) => _logs.push(args.join(" "));
+    let revokeBody = null;
+    mockGoogleAPIs({
+      revoke: (opts) => {
+        revokeBody = String(opts.body || "");
+        return Promise.resolve(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+    });
+    try {
+      const token = await completeYouTubeOAuth();
+      assert.ok(token, "Session token obtained");
+
+      const r = await fetch(BASE + "/api/youtube/disconnect", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal(r.status, 200);
+      const body = await r.json();
+      assert.equal(body.disconnected, true, "Response shape { disconnected: true }");
+
+      assert.ok(revokeBody, "Google revoke request was made");
+      assert.ok(revokeBody.includes("token=mock_youtube_refresh_token_xyz789"), "Refresh token sent to Google revoke (preferred)");
+      assert.ok(!JSON.stringify(body).includes("mock_youtube_refresh_token"), "No token in response");
+
+      const allLogs = _logs.join("\n");
+      assert.ok(!allLogs.includes("mock_youtube_access_token"), "Access token never logged");
+      assert.ok(!allLogs.includes("mock_youtube_refresh_token"), "Refresh token never logged");
+      assert.ok(!allLogs.includes(token), "Session token never logged");
+
+      // Local credentials cleared: status no longer connected, channel 401.
+      const s = await fetch(BASE + "/api/youtube/status", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal((await s.json()).connected, false, "Disconnected after revoke");
+      const ch = await fetch(BASE + "/api/youtube/channel", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal(ch.status, 401, "Channel endpoint rejects cleared session");
+    } finally {
+      console.log = _origLog;
+      console.error = _origErr;
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("53. Disconnect succeeds when Google says the token is already invalid/revoked (400)", async () => {
+    const _orig = globalThis.fetch;
+    mockGoogleAPIs({
+      revoke: () => Promise.resolve(new Response(JSON.stringify({ error: "invalid_token" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }))
+    });
+    try {
+      const token = await completeYouTubeOAuth();
+      const r = await fetch(BASE + "/api/youtube/disconnect", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal(r.status, 200, "Disconnect still succeeds on already-invalid token");
+      assert.equal((await r.json()).disconnected, true);
+
+      const s = await fetch(BASE + "/api/youtube/status", {
+        headers: { "Authorization": "Bearer " + token }
+      });
+      assert.equal((await s.json()).connected, false, "Local session cleared after disconnect");
+    } finally {
+      globalThis.fetch = _orig;
+    }
+  });
+
+  it("54. Disconnect with no stored token remains successful and idempotent", async () => {
+    const r = await fetch(BASE + "/api/youtube/disconnect", {
+      method: "POST"
+    });
+    assert.equal(r.status, 200);
+    assert.equal((await r.json()).disconnected, true, "No-token disconnect succeeds");
+
+    const r2 = await fetch(BASE + "/api/youtube/disconnect", {
+      method: "POST"
+    });
+    assert.equal(r2.status, 200);
+    assert.equal((await r2.json()).disconnected, true, "Repeated disconnect stays safe");
+  });
+
+  it("55. Upload UI shows YouTube Terms certification notice and required description", async () => {
+    const html = readFileSync(new URL("../youtube.html", import.meta.url), "utf8");
+    assert.ok(html.includes("By clicking Upload to YouTube, you certify that the content you are uploading complies with the"), "Certification statement visible");
+    assert.ok(html.includes('href="https://www.youtube.com/t/terms"'), "YouTube Terms link present");
+    assert.ok(html.includes('target="_blank" rel="noopener noreferrer"'), "Link opens safely in new tab");
+    const certIndex = html.indexOf("certify that the content");
+    const uploadIndex = html.indexOf('id="upload-btn"');
+    assert.ok(certIndex !== -1 && uploadIndex !== -1 && certIndex < uploadIndex, "Certification notice is adjacent to the Upload button");
+    assert.ok(html.includes('<label for="video-description">Video description</label>'), "Description label marks it as a field");
+    assert.ok(html.includes('id="video-description" name="description" rows="4" placeholder="Describe your video" required'), "Description is required in HTML");
+  });
+
+  it("56. Terms of Service links the YouTube Terms of Service for the YouTube integration", async () => {
+    const html = readFileSync(new URL("../terms-of-service.html", import.meta.url), "utf8");
+    assert.ok(html.includes("YouTube Integration"), "YouTube Integration wording present");
+    assert.ok(html.includes("you must comply with the"), "Explicit compliance statement present");
+    assert.ok(html.includes('href="https://www.youtube.com/t/terms"'), "Direct YouTube Terms link present");
+    assert.ok(html.includes('target="_blank" rel="noopener noreferrer"'), "Link opens safely in new tab");
   });
 
 console.log("\n✅ YouTube tests complete.\n");
