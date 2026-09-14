@@ -1507,12 +1507,14 @@ describe("YouTube Integration", () => {
 
   it("55. Upload UI shows YouTube Terms certification notice and required description", async () => {
     const html = readFileSync(new URL("../youtube.html", import.meta.url), "utf8");
-    assert.ok(html.includes("By clicking Upload to YouTube, you certify that the content you are uploading complies with the"), "Certification statement visible");
+    assert.ok(html.includes("By clicking 'upload,' you certify that the content you are uploading complies with the YouTube Terms of Service"), "Required certification wording present");
+    assert.ok(html.includes("YouTube Community Guidelines"), "YouTube Community Guidelines referenced");
+    assert.ok(html.includes("Please be sure not to violate others' copyright or privacy rights."), "Copyright/privacy warning present");
     assert.ok(html.includes('href="https://www.youtube.com/t/terms"'), "YouTube Terms link present");
     assert.ok(html.includes('target="_blank" rel="noopener noreferrer"'), "Link opens safely in new tab");
     const certIndex = html.indexOf("certify that the content");
     const uploadIndex = html.indexOf('id="upload-btn"');
-    assert.ok(certIndex !== -1 && uploadIndex !== -1 && certIndex < uploadIndex, "Certification notice is adjacent to the Upload button");
+    assert.ok(certIndex !== -1 && uploadIndex !== -1 && certIndex < uploadIndex, "Certification notice appears before the Upload button");
     assert.ok(html.includes('<label for="video-description">Video description</label>'), "Description label marks it as a field");
     assert.ok(html.includes('id="video-description" name="description" rows="4" placeholder="Describe your video" required'), "Description is required in HTML");
   });
