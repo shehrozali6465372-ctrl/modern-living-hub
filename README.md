@@ -118,6 +118,6 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## Contact
 
-- **Email:** shehrozali6465371@gmail.com
+- **Email:** shehrozali6465372@gmail.com
 - **GitHub:** [github.com/shehrozali6465372-ctrl](https://github.com/shehrozali6465372-ctrl)
 - **Website:** [shehrozali6465372-ctrl.github.io/modern-living-hub](https://shehrozali6465372-ctrl.github.io/modern-living-hub)

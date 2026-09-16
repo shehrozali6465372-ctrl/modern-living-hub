@@ -22,4 +22,4 @@ To become the world's leading AI-powered content operating system.
 
 - **Registered:** Delaware, United States
 - **Website:** https://shehrozali6465372-ctrl.github.io/modern-living-hub
-- **Contact:** shehrozali6465371@gmail.com
+- **Contact:** shehrozali6465372@gmail.com
