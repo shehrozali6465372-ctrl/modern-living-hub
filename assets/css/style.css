@@ -1265,3 +1265,21 @@ p { margin-bottom: 1rem; }
     }
     .yt-upload-btn { width: 100%; }
 }
+
+
+/* YouTube official full-color brand asset */
+.yt-brand-icon {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    max-width: none;
+    max-height: none;
+    flex: 0 0 auto;
+    object-fit: contain;
+    vertical-align: middle;
+}
+.btn-youtube .yt-brand-icon { width: 20px; height: 20px; }
+.yt-platform-icon .yt-brand-icon { width: 40px; height: 40px; }
+#disconnected-state .yt-platform-icon .yt-brand-icon { width: 48px; height: 48px; }

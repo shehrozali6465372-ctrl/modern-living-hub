@@ -62,6 +62,12 @@
 
     // ─── DOM references ───
     var connectBtn = document.getElementById('connect-youtube-btn');
+    var connectLabel = document.getElementById('yt-connect-label');
+
+    function setConnectButtonText(text) {
+        if (connectLabel) connectLabel.textContent = text;
+        else if (connectBtn) connectBtn.textContent = text;
+    }
     var loadingState = document.getElementById('loading-state');
     var connectedState = document.getElementById('connected-state');
     var disconnectedState = document.getElementById('disconnected-state');
@@ -85,7 +91,7 @@
         if (connectedState) connectedState.style.display = 'block';
         if (disconnectedState) disconnectedState.style.display = 'none';
         if (connectBtn) {
-            connectBtn.textContent = '\u2705 Connected';
+            setConnectButtonText('\u2705 Connected');
             connectBtn.classList.add('yt-btn-connected');
             connectBtn.href = '#';
             connectBtn.style.pointerEvents = 'none';
@@ -99,7 +105,7 @@
         if (connectedState) connectedState.style.display = 'none';
         if (disconnectedState) disconnectedState.style.display = 'block';
         if (connectBtn) {
-            connectBtn.textContent = CONNECT_TEXT;
+            setConnectButtonText(CONNECT_TEXT);
             connectBtn.classList.remove('yt-btn-connected');
             connectBtn.href = isBackendConfigured() ? BACKEND + '/youtube/auth' : '#';
             connectBtn.style.pointerEvents = isBackendConfigured() ? 'auto' : 'none';
@@ -114,7 +120,7 @@
         setLoading(false);
         clearErrorBanner();
         if (connectBtn) {
-            connectBtn.textContent = CONNECTING_TEXT;
+            setConnectButtonText(CONNECTING_TEXT);
             connectBtn.style.pointerEvents = 'none';
         }
         var label = document.querySelector('.yt-status-title');
@@ -287,11 +293,11 @@
                 showErrorBanner('Backend URL not configured. Set window.BACKEND_URL first.');
                 return;
             }
-            if (connectBtn.textContent === CONNECTING_TEXT) {
+            if ((connectLabel ? connectLabel.textContent : connectBtn.textContent) === CONNECTING_TEXT) {
                 e.preventDefault();
                 return;
             }
-            connectBtn.textContent = CONNECTING_TEXT;
+            setConnectButtonText(CONNECTING_TEXT);
             connectBtn.style.pointerEvents = 'none';
         });
     }
@@ -479,7 +485,7 @@
 
             closeDisconnectModal();
             if (connectBtn) {
-                connectBtn.textContent = 'Disconnecting…';
+                setConnectButtonText('Disconnecting…');
                 connectBtn.style.pointerEvents = 'none';
             }
 

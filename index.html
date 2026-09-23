@@ -64,7 +64,8 @@
                         🎵 Connect TikTok
                     </a>
                     <a href="/youtube/auth" class="btn btn-youtube" id="connect-youtube-btn">
-                        ▶️ Connect YouTube
+                        <img class="yt-brand-icon" src="assets/images/youtube-icon.svg" alt="" aria-hidden="true" width="20" height="20">
+                        <span id="connect-youtube-label">Connect YouTube</span>
                     </a>
                 </div>
 
@@ -140,7 +141,7 @@
             <p class="section-subtitle">These integrations are live and ready to connect.</p>
             <div class="platforms-grid">
                 <div class="platform-item"><span class="platform-icon">📌</span><span>Pinterest</span></div>
-                <div class="platform-item"><span class="platform-icon">▶️</span><span>YouTube</span></div>
+                <div class="platform-item"><img class="platform-icon yt-brand-icon" src="assets/images/youtube-icon.svg" alt="" aria-hidden="true" width="20" height="20"><span>YouTube</span></div>
                 <div class="platform-item"><span class="platform-icon">🎵</span><span>TikTok</span></div>
             </div>
         </div>
@@ -234,6 +235,7 @@
         var KEY = 'mlh_youtube_session_token';
         var token = localStorage.getItem(KEY) || null;
         var connectBtn  = document.getElementById('connect-youtube-btn');
+        var connectLabel = document.getElementById('connect-youtube-label');
         var statusBanner = document.getElementById('youtube-status');
         var disconnectBtn = document.getElementById('disconnect-youtube-btn');
 
@@ -254,7 +256,7 @@
           .then(function (d) {
             if (d.connected) {
               if (connectBtn) {
-                connectBtn.textContent = '\u2705 YouTube Connected';
+                if (connectLabel) connectLabel.textContent = 'YouTube Connected';
                 connectBtn.href = '#';
                 connectBtn.style.pointerEvents = 'none';
                 connectBtn.style.opacity = '0.6';
@@ -277,7 +279,7 @@
             .then(function () {
               localStorage.removeItem(KEY);
               if (connectBtn) {
-                connectBtn.textContent = '\u25B6\uFE0F Connect YouTube';
+                if (connectLabel) connectLabel.textContent = 'Connect YouTube';
                 connectBtn.href = B + '/youtube/auth';
                 connectBtn.style.pointerEvents = 'auto';
                 connectBtn.style.opacity = '';
