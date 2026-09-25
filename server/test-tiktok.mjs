@@ -949,7 +949,16 @@ it("18. Post init requires explicit privacy selection", async () => {
 
   it("25. Revoke success → local cleanup → disconnected", async () => {
     const _orig = globalThis.fetch;
-    mockTikTokApi();
+    let revokeBody = null;
+    mockTikTokApi({
+      revoke: (opts) => {
+        revokeBody = String(opts && opts.body || "");
+        return Promise.resolve(new Response(JSON.stringify({
+          data: {},
+          error: { code: "ok", message: "" }
+        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+    });
     try {
       // Re-authenticate to get a fresh session token
       TS.sessionToken = await completeTikTokOAuth();
@@ -968,6 +977,9 @@ it("18. Post init requires explicit privacy selection", async () => {
       });
       assert.equal(r.status, 200);
       assert.equal((await r.json()).disconnected, true);
+      const revokeParams = new URLSearchParams(revokeBody || "");
+      assert.equal(revokeParams.get("token"), "mock_tiktok_access_token", "Revoke must send TikTok's token parameter");
+      assert.equal(revokeParams.get("access_token"), null, "Revoke must not send the obsolete access_token parameter");
 
       // Verify disconnected
       const post = await fetch(BASE + "/api/tiktok/status", {
