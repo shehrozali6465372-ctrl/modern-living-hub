@@ -375,7 +375,7 @@ export function registerTikTokRoutes(app, opts) {
   // https://developers.tiktok.com/doc/login-kit-manage-user-access-tokens-new
   // POST https://open.tiktokapis.com/v2/oauth/revoke/
   // Content-Type: application/x-www-form-urlencoded
-  // Body: client_key, client_secret, access_token
+  // Body: client_key, client_secret, token
   async function revokeTikTokToken(accessToken) {
     if (!accessToken) return { ok: false, reason: "no_token" };
     try {
@@ -391,15 +391,15 @@ export function registerTikTokRoutes(app, opts) {
         body
       });
 
-      const raw = await r.json().catch(() => ({}));
-      const errCode = raw?.error?.code || "unknown";
-      const errMsg = raw?.error?.message || "";
-
-      // "ok" = success; "invalid_token" / "token_not_found" = already invalid — both mean clean up locally
-      if (errCode === "ok" || errCode === "invalid_token" || errCode === "token_not_found") {
-        console.log("TikTok revoke: status=" + r.status + " code=" + errCode);
-        return { ok: true, code: errCode };
+      // TikTok's current revoke API returns an empty response body on success.
+      if (r.ok) {
+        console.log("TikTok revoke: status=" + r.status + " success=true");
+        return { ok: true, code: "ok" };
       }
+
+      const raw = await r.json().catch(() => ({}));
+      const errCode = raw?.error?.code || raw?.error || "unknown";
+      const errMsg = raw?.error?.message || raw?.error_description || raw?.error?.description || "Unknown revoke error";
 
       console.error("TikTok revoke failed:", "HTTP", r.status, "code", errCode, "msg", errMsg);
       return { ok: false, code: errCode, message: errMsg };
