@@ -953,10 +953,8 @@ it("18. Post init requires explicit privacy selection", async () => {
     mockTikTokApi({
       revoke: (opts) => {
         revokeBody = String(opts && opts.body || "");
-        return Promise.resolve(new Response(JSON.stringify({
-          data: {},
-          error: { code: "ok", message: "" }
-        }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        // TikTok's current revoke endpoint returns an empty body on success.
+        return Promise.resolve(new Response(null, { status: 200 }));
       }
     });
     try {
