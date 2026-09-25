@@ -382,7 +382,7 @@ export function registerTikTokRoutes(app, opts) {
       const body = new URLSearchParams({
         client_key: TT_CLIENT_KEY,
         client_secret: TT_CLIENT_SECRET,
-        access_token: accessToken
+        token: accessToken
       }).toString();
 
       const r = await fetch(TIKTOK_REVOKE_URL, {
