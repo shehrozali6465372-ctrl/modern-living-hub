@@ -24,7 +24,10 @@ const CLIENT_ID = process.env.PINTEREST_CLIENT_ID;
 const CLIENT_SECRET = process.env.PINTEREST_CLIENT_SECRET;
 const REDIRECT_URI = process.env.PINTEREST_REDIRECT_URI;
 const SESSION_SECRET = process.env.SESSION_SECRET;
-const FRONTEND_URL = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+const configuredFrontendUrl = (process.env.FRONTEND_URL || "").trim();
+const FRONTEND_URL = (configuredFrontendUrl || "https://modernlivinghub.vercel.app")
+  .replace("https://shehrozali6465372-ctrl.github.io/modern-living-hub", "https://modernlivinghub.vercel.app")
+  .replace(/\/+$/, "");
 const CORS_ORIGIN = new URL(FRONTEND_URL).origin;
 
 const isProduction = process.env.NODE_ENV === "production";
@@ -162,7 +165,7 @@ function clearTokensCookie(res) {
 
 // ─── CORS ───
 // Only allow the actual frontend origin.
-// Production: https://shehrozali6465372-ctrl.github.io
+// Production: https://modernlivinghub.vercel.app
 // Development: localhost origins
 const allowedOrigins = [
   CORS_ORIGIN,
