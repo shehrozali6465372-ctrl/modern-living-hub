@@ -66,7 +66,7 @@
 
     function showDisconnectedUI() {
         if (connectBtn) {
-            connectBtn.textContent = '🎵 Connect TikTok';
+            var label = document.getElementById('tiktok-connect-label'); if (label) label.textContent = 'Connect TikTok';
             connectBtn.href = isBackendConfigured() ? BACKEND + '/tiktok/auth' : '#';
             connectBtn.style.pointerEvents = isBackendConfigured() ? '' : 'none';
             connectBtn.style.opacity = isBackendConfigured() ? '' : '0.5';
