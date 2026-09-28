@@ -790,13 +790,25 @@ p { margin-bottom: 1rem; }
 .btn-youtube-home {
     background: #FFFFFF;
     color: #0F0F0F;
-    border: 1px solid #D3D3D3;
+    border: 1px solid #E0E0E0;
 }
 
 .btn-youtube-home:hover {
     background: #F7F7F7;
     color: #0F0F0F;
-    border-color: #D3D3D3;
+    border-color: #E0E0E0;
+}
+
+.yt-connect-button {
+    background: #FFFFFF;
+    color: #0F0F0F;
+    border: 1px solid #E0E0E0;
+}
+
+.yt-connect-button:hover {
+    background: #F7F7F7;
+    color: #0F0F0F;
+    border-color: #E0E0E0;
 }
 
 .btn-disconnect {
