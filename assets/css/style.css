@@ -724,9 +724,9 @@ p { margin-bottom: 1rem; }
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    background: #e60023;
-    color: #ffffff;
-    border: none;
+    background: #ffffff;
+    color: #0f0f0f;
+    border: 1px solid #d3d3d3;
     padding: 0.75rem 1.75rem;
     border-radius: var(--border-radius);
     font-size: 0.9rem;
@@ -737,8 +737,8 @@ p { margin-bottom: 1rem; }
 }
 
 .btn-pinterest:hover {
-    background: #ad081b;
-    color: #ffffff;
+    background: #f7f7f7;
+    color: #0f0f0f;
     transform: translateY(-1px);
 }
 
@@ -746,9 +746,9 @@ p { margin-bottom: 1rem; }
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    background: #ff0050;
-    color: #ffffff;
-    border: none;
+    background: #ffffff;
+    color: #0f0f0f;
+    border: 1px solid #d3d3d3;
     padding: 0.75rem 1.75rem;
     border-radius: var(--border-radius);
     font-size: 0.9rem;
@@ -759,8 +759,8 @@ p { margin-bottom: 1rem; }
 }
 
 .btn-tiktok:hover {
-    background: #cf0047;
-    color: #ffffff;
+    background: #f7f7f7;
+    color: #0f0f0f;
     transform: translateY(-1px);
 }
 
