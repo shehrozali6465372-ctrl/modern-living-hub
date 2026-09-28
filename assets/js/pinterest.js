@@ -184,7 +184,7 @@
 
     function showDisconnectedUI() {
         if (connectBtn) {
-            connectBtn.textContent = '📌 Connect Pinterest';
+            var label = document.getElementById('pinterest-connect-label'); if (label) label.textContent = 'Connect Pinterest';
             connectBtn.href = isBackendConfigured() ? BACKEND + '/auth/pinterest' : '#';
             connectBtn.style.pointerEvents = isBackendConfigured() ? '' : 'none';
             connectBtn.style.opacity = isBackendConfigured() ? '' : '0.5';
