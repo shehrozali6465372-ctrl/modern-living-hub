@@ -786,6 +786,19 @@ p { margin-bottom: 1rem; }
     transform: translateY(-1px);
 }
 
+/* Homepage YouTube connect button: keep the official red icon fully visible. */
+.btn-youtube-home {
+    background: #FFFFFF;
+    color: #0F0F0F;
+    border: 1px solid #D3D3D3;
+}
+
+.btn-youtube-home:hover {
+    background: #F7F7F7;
+    color: #0F0F0F;
+    border-color: #D3D3D3;
+}
+
 .btn-disconnect {
     background: transparent;
     border: 1px solid var(--color-error);
