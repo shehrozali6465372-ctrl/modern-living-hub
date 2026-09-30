@@ -56,11 +56,11 @@ modern-living-hub/
 
 ## Quick Start
 
-### Frontend (GitHub Pages)
+### Frontend (Vercel)
 
-The site is static HTML served by GitHub Pages. No build step required.
+The site is static HTML deployed on Vercel. No build step required.
 
-- **Production URL:** [https://shehrozali6465372-ctrl.github.io/modern-living-hub](https://shehrozali6465372-ctrl.github.io/modern-living-hub)
+- **Production URL:** [https://modernlivinghub.vercel.app](https://modernlivinghub.vercel.app)
 
 ### Backend (Pinterest OAuth + API)
 
@@ -89,7 +89,7 @@ See `server/README.md` for full API documentation and deployment options.
    - `PINTEREST_CLIENT_SECRET`
    - `PINTEREST_REDIRECT_URI` (must match Pinterest app registration exactly)
    - `SESSION_SECRET`
-   - `FRONTEND_URL` (e.g. `https://shehrozali6465372-ctrl.github.io/modern-living-hub`)
+   - `FRONTEND_URL` (e.g. `https://modernlivinghub.vercel.app`)
 7. Set `window.BACKEND_URL` in `index.html` and `pinterest.html` to the deployed backend domain.
    The frontend shows a clear configuration error if this is not set.
 
@@ -106,11 +106,11 @@ See `server/README.md` for full API documentation and deployment options.
 
 ## Cross-Origin Deployment Notes
 
-- **Frontend:** GitHub Pages (`https://shehrozali6465372-ctrl.github.io`)
+- **Frontend:** Vercel (`https://modernlivinghub.vercel.app`)
 - **Backend:** Separate Node.js server on its own HTTPS domain
 - Backend CORS allows only the origin derived from `FRONTEND_URL` (no wildcards).
 - Production sessions use `SameSite=None` + `Secure=true` so cross-origin
-  requests from the GitHub Pages frontend can be authenticated.
+  requests from the Vercel frontend can be authenticated.
 
 ## License
 
@@ -120,4 +120,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 - **Email:** shehrozali6465372@gmail.com
 - **GitHub:** [github.com/shehrozali6465372-ctrl](https://github.com/shehrozali6465372-ctrl)
-- **Website:** [shehrozali6465372-ctrl.github.io/modern-living-hub](https://shehrozali6465372-ctrl.github.io/modern-living-hub)
+- **Website:** [modernlivinghub.vercel.app](https://modernlivinghub.vercel.app)

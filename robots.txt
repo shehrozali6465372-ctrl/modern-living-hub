@@ -1,7 +1,7 @@
 # robots.txt for Modern Living Hub
-# https://shehrozali6465372-ctrl.github.io/modern-living-hub
+# https://modernlivinghub.vercel.app
 
 User-agent: *
 Allow: /
 
-Sitemap: https://shehrozali6465372-ctrl.github.io/modern-living-hub/sitemap.xml
+Sitemap: https://modernlivinghub.vercel.app/sitemap.xml

@@ -7,8 +7,8 @@ Modern Living Hub is built on a modern, cloud-native architecture designed for s
 ## Tech Stack
 
 - **Frontend:** HTML5, CSS3, JavaScript (Vanilla)
-- **Hosting:** GitHub Pages (CDN-backed)
-- **Domain:** shehrozali6465372-ctrl.github.io/modern-living-hub
+- **Hosting:** Vercel (CDN-backed)
+- **Domain:** modernlivinghub.vercel.app
 - **Security:** TLS 1.3, OAuth 2.0
 
 ## Component Architecture

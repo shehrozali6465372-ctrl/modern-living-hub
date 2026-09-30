@@ -14,7 +14,7 @@ process.env.PINTEREST_CLIENT_ID = "test_client_id";
 process.env.PINTEREST_CLIENT_SECRET = "test_client_secret";
 process.env.PINTEREST_REDIRECT_URI = "https://modern-living-hub.onrender.com/auth/pinterest/callback";
 process.env.SESSION_SECRET = "test_session_secret_key_1234567890abcdef";
-process.env.FRONTEND_URL = "https://shehrozali6465372-ctrl.github.io/modern-living-hub";
+process.env.FRONTEND_URL = "https://modernlivinghub.vercel.app";
 process.env.NODE_ENV = "test";
 process.env.PORT = "3510";
 
