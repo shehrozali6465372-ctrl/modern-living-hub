@@ -25,9 +25,14 @@ const CLIENT_SECRET = process.env.PINTEREST_CLIENT_SECRET;
 const REDIRECT_URI = process.env.PINTEREST_REDIRECT_URI;
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const configuredFrontendUrl = (process.env.FRONTEND_URL || "").trim();
-const FRONTEND_URL = (configuredFrontendUrl || "https://modernlivinghub.vercel.app")
-  .replace(/\/+$/, "");
+if (!configuredFrontendUrl) {
+  throw new Error("Missing required FRONTEND_URL environment variable. Set it to https://modernlivinghub.vercel.app in production.");
+}
+const FRONTEND_URL = configuredFrontendUrl.replace(/\/+$/, "");
 const CORS_ORIGIN = new URL(FRONTEND_URL).origin;
+if (CORS_ORIGIN !== "https://modernlivinghub.vercel.app") {
+  throw new Error(`Invalid FRONTEND_URL origin: ${CORS_ORIGIN}. Production must use https://modernlivinghub.vercel.app.`);
+}
 
 const isProduction = process.env.NODE_ENV === "production";
 
@@ -43,11 +48,6 @@ if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI || !SESSION_SECRET) {
   console.error(
     "Missing required environment variables. Check PINTEREST_CLIENT_ID, PINTEREST_CLIENT_SECRET, PINTEREST_REDIRECT_URI, SESSION_SECRET."
   );
-  process.exit(1);
-}
-
-if (!FRONTEND_URL) {
-  console.error("Missing FRONTEND_URL environment variable. Set it to the deployed frontend origin.");
   process.exit(1);
 }
 
@@ -166,14 +166,7 @@ function clearTokensCookie(res) {
 // Only allow the actual frontend origin.
 // Production: https://modernlivinghub.vercel.app
 // Development: localhost origins
-const allowedOrigins = [
-  CORS_ORIGIN,
-  "http://localhost:5500",
-  "http://127.0.0.1:5500",
-  "http://localhost:8000",
-  "http://localhost:3000",
-  "http://localhost:8080"
-];
+const allowedOrigins = [CORS_ORIGIN];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
