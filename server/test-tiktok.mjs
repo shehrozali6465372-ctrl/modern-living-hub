@@ -167,6 +167,8 @@ async function completeTikTokOAuth() {
   assert.equal(r2.status, 302, "Should redirect (302)");
   const redirectUrl = r2.headers.get("location");
   assert.ok(redirectUrl.includes("tiktok_connected=1"), "Should have tiktok_connected=1");
+  assert.ok(redirectUrl.startsWith("https://modernlivinghub.vercel.app/tiktok.html"), "Post-OAuth redirect must land on the Vercel TikTok page");
+  assert.ok(!redirectUrl.includes("github.io"), "Post-OAuth redirect must never contain github.io");
   assert.ok(redirectUrl.includes("tt_handoff="), "Should have tt_handoff");
 
   const handoffCode = new URL(redirectUrl).searchParams.get("tt_handoff");
