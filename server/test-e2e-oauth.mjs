@@ -16,7 +16,7 @@ process.env.PINTEREST_CLIENT_ID = "test_e2e_client_id";
 process.env.PINTEREST_CLIENT_SECRET = "test_e2e_client_secret";
 process.env.PINTEREST_REDIRECT_URI = "https://modern-living-hub.onrender.com/auth/pinterest/callback";
 process.env.SESSION_SECRET = "test_e2e_session_secret_key_abcdef1234567890";
-process.env.FRONTEND_URL = "https://shehrozali6465372-ctrl.github.io/modern-living-hub";
+process.env.FRONTEND_URL = "https://modernlivinghub.vercel.app";
 process.env.NODE_ENV = "test";
 process.env.PORT = "3509";
 
@@ -313,7 +313,7 @@ describe("E2E OAuth Flow — Full Production Simulation", () => {
     const r = await fetch(BASE + "/api/pinterest/complete", {
       method: "OPTIONS",
       headers: {
-        "Origin": "https://shehrozali6465372-ctrl.github.io",
+        "Origin": "https://modernlivinghub.vercel.app",
         "Access-Control-Request-Method": "POST",
         "Access-Control-Request-Headers": "Content-Type, Authorization"
       }

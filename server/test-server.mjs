@@ -7,7 +7,7 @@ process.env.PINTEREST_CLIENT_ID = "test_client_id_12345";
 process.env.PINTEREST_CLIENT_SECRET = "test_secret_do_not_log";
 process.env.PINTEREST_REDIRECT_URI = "https://modern-living-hub.onrender.com/auth/pinterest/callback";
 process.env.SESSION_SECRET = "test_session_secret_for_testing_only_abc123xyz";
-process.env.FRONTEND_URL = "https://shehrozali6465372-ctrl.github.io/modern-living-hub";
+process.env.FRONTEND_URL = "https://modernlivinghub.vercel.app";
 process.env.NODE_ENV = "test";
 process.env.PORT = "3461";
 
@@ -122,9 +122,9 @@ describe("5. OAuth callback rejects invalid state (redirects with error)", () =>
 describe("6. CORS enforcement", () => {
   it("Allows configured frontend origin", async () => {
     const r = await fetch(BASE + "/api/health", {
-      headers: { Origin: "https://shehrozali6465372-ctrl.github.io" },
+      headers: { Origin: "https://modernlivinghub.vercel.app" },
     });
-    assert.equal(r.headers.get("access-control-allow-origin"), "https://shehrozali6465372-ctrl.github.io");
+    assert.equal(r.headers.get("access-control-allow-origin"), "https://modernlivinghub.vercel.app");
   });
 
   it("Does not set ACAO for disallowed origin", async () => {

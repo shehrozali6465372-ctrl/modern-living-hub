@@ -7,17 +7,17 @@
     <meta name="description" content="Modern Living Hub is a Universal AI Content Operating System with multi-platform publishing support. Automate, optimize, and scale your content with AI-powered publishing.">
     <meta name="keywords" content="AI content operating system, AI publishing platform, content automation, Pinterest API, TikTok API, Universal AI OS, Modern Living Hub">
     <meta name="robots" content="index, follow">
-    <link rel="canonical" href="https://shehrozali6465372-ctrl.github.io/modern-living-hub/">
+    <link rel="canonical" href="https://modernlivinghub.vercel.app/">
     <meta property="og:type" content="website">
     <meta property="og:title" content="Modern Living Hub — Universal AI Content OS">
     <meta property="og:description" content="Automate, optimize, and scale your content with AI-powered publishing across multiple platforms.">
-    <meta property="og:url" content="https://shehrozali6465372-ctrl.github.io/modern-living-hub/">
+    <meta property="og:url" content="https://modernlivinghub.vercel.app/">
     <meta property="og:site_name" content="Modern Living Hub">
-    <meta property="og:image" content="https://shehrozali6465372-ctrl.github.io/modern-living-hub/assets/images/logo.png">
+    <meta property="og:image" content="https://modernlivinghub.vercel.app/assets/images/logo.png">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Modern Living Hub — Universal AI Content OS">
     <meta name="twitter:description" content="AI-powered content operating system for multi-platform publishing.">
-    <meta name="twitter:image" content="https://shehrozali6465372-ctrl.github.io/modern-living-hub/assets/images/logo.png">
+    <meta name="twitter:image" content="https://modernlivinghub.vercel.app/assets/images/logo.png">
     <link rel="stylesheet" href="assets/css/style.css">
     <link rel="icon" href="favicon.ico" type="image/x-icon">
 </head>
@@ -274,7 +274,7 @@
         fetch(B + '/api/youtube/status', { headers: { Authorization: 'Bearer ' + token }, credentials: 'include' })
           .then(function (r) { return r.json(); })
           .then(function (d) {
-            if (d.connected) {
+            if (d.connected === true) {
               if (connectBtn) {
                 if (connectLabel) connectLabel.textContent = 'YouTube Connected';
                 connectBtn.href = '#';

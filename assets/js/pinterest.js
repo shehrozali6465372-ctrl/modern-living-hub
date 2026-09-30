@@ -89,7 +89,7 @@
                 body: JSON.stringify({ handoff: code })
             });
             var data = await res.json();
-            if (data.connected && data.session_token) {
+            if (data.connected === true && data.session_token) {
                 sessionToken = data.session_token;
                 localStorage.setItem(SESSION_TOKEN_KEY, sessionToken);
                 showConnectedUI();
@@ -144,7 +144,7 @@
                 headers: authHeaders()
             });
             var data = await res.json();
-            if (data.connected) {
+            if (data.connected === true) {
                 showConnectedUI();
             } else if (data.needs_reauth) {
                 // Token lacks required scopes — force fresh OAuth with prompt=consent

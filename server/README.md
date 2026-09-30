@@ -37,7 +37,7 @@ npm start
 | `PINTEREST_CLIENT_SECRET` | Yes      | Pinterest app client secret (server-side only, never in frontend) |
 | `PINTEREST_REDIRECT_URI`  | Yes      | Exact callback URL registered in Pinterest app settings  |
 | `SESSION_SECRET`          | Yes      | Random string for session encryption                     |
-| `FRONTEND_URL`            | Yes      | Full deployed frontend base URL including project path. e.g. `https://shehrozali6465372-ctrl.github.io/modern-living-hub`. CORS origin is derived from this automatically. |
+| `FRONTEND_URL`            | Yes      | Full deployed frontend base URL including project path. e.g. `https://modernlivinghub.vercel.app`. CORS origin is derived from this automatically. |
 | `PORT`                    | No       | Server port, defaults to 3001                            |
 | `NODE_ENV`                | No       | Set to `production` for secure HTTPS cookies + SameSite=None |
 | `TIKTOK_CLIENT_KEY`        | No       | TikTok app client key (for TikTok integration)             |
@@ -52,14 +52,14 @@ npm start
 `FRONTEND_URL` is the **full deployed frontend base URL**, including the project path.
 
 - **OAuth redirects** use `FRONTEND_URL` directly:
-  `https://shehrozali6465372-ctrl.github.io/modern-living-hub/pinterest.html`
+  `https://modernlivinghub.vercel.app/pinterest.html`
 
 - **CORS** is derived from `new URL(FRONTEND_URL).origin`, so it allows:
-  `https://shehrozali6465372-ctrl.github.io`
+  `https://modernlivinghub.vercel.app`
   (just the origin, without the project path)
 
 This means the frontend can be served under a project subpath (like `/modern-living-hub`)
-while CORS correctly allows requests from the GitHub Pages origin.
+while CORS correctly allows requests from the Vercel origin.
 
 ## Required Pinterest Scopes
 
@@ -98,7 +98,7 @@ The YouTube integration requests these scopes only:
 
 ## Cross-Origin Authentication
 
-The frontend is hosted on GitHub Pages (`https://shehrozali6465372-ctrl.github.io/modern-living-hub`)
+The frontend is hosted on Vercel (`https://modernlivinghub.vercel.app`)
 and the backend runs on a separate domain. Cross-site cookies are unreliable, so the app uses
 a **one-time handoff code + bearer session token** architecture:
 
@@ -161,7 +161,7 @@ a **one-time handoff code + bearer session token** architecture:
    - `PINTEREST_CLIENT_SECRET`
    - `PINTEREST_REDIRECT_URI` = `https://modern-living-hub.onrender.com/auth/pinterest/callback`
    - `SESSION_SECRET` = (generate a random string)
-   - `FRONTEND_URL` = `https://shehrozali6465372-ctrl.github.io/modern-living-hub`
+   - `FRONTEND_URL` = `https://modernlivinghub.vercel.app`
    - `NODE_ENV` = `production`
 6. Register `https://modern-living-hub.onrender.com/auth/pinterest/callback` in Pinterest
 
@@ -178,7 +178,7 @@ a **one-time handoff code + bearer session token** architecture:
 ```bash
 cd server
 npm install --production
-NODE_ENV=production FRONTEND_URL=https://shehrozali6465372-ctrl.github.io/modern-living-hub node src/server.js
+NODE_ENV=production FRONTEND_URL=https://modernlivinghub.vercel.app node src/server.js
 ```
 
 Use Nginx reverse proxy with HTTPS enabled (e.g. via Let's Encrypt).
@@ -198,7 +198,7 @@ All API calls (OAuth, status, boards, pins, disconnect) use this single URL.
 The `credentials: "include"` flag ensures the session cookie is sent.
 
 If `BACKEND_URL` contains `YOUR-BACKEND` or is empty, the frontend shows
-a configuration error instead of silently sending requests to GitHub Pages.
+a configuration error instead of silently sending requests to Vercel.
 
 ## YouTube Integration
 

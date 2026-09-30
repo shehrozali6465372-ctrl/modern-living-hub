@@ -7,7 +7,7 @@
  *   PINTEREST_CLIENT_SECRET — Pinterest app client secret (server-side only)
  *   PINTEREST_REDIRECT_URI  — Exact callback URL registered with Pinterest
  *   SESSION_SECRET          — Secret for express-session
- *   FRONTEND_URL            — Full deployed frontend base URL including project path (e.g. https://shehrozali6465372-ctrl.github.io/modern-living-hub)
+ *   FRONTEND_URL            — Full deployed frontend base URL including project path (e.g. https://modernlivinghub.vercel.app)
  */
 
 import express from "express";
@@ -26,7 +26,6 @@ const REDIRECT_URI = process.env.PINTEREST_REDIRECT_URI;
 const SESSION_SECRET = process.env.SESSION_SECRET;
 const configuredFrontendUrl = (process.env.FRONTEND_URL || "").trim();
 const FRONTEND_URL = (configuredFrontendUrl || "https://modernlivinghub.vercel.app")
-  .replace("https://shehrozali6465372-ctrl.github.io/modern-living-hub", "https://modernlivinghub.vercel.app")
   .replace(/\/+$/, "");
 const CORS_ORIGIN = new URL(FRONTEND_URL).origin;
 
@@ -81,7 +80,7 @@ app.use(cookieParser(SESSION_SECRET));
 // ─── Session configuration (cookie-session) ───
 // Stores the entire session in a signed cookie — no server-side state.
 // This survives Render free tier hibernation between OAuth callback and
-// the subsequent cross-origin API request from GitHub Pages.
+// the subsequent cross-origin API request from the Vercel frontend.
 app.use(
   cookieSession({
     name: "mlh.sid",
@@ -102,7 +101,7 @@ app.use(
 // dedicated HttpOnly, Secure cookie. This cookie survives Render free-tier
 // hibernation (which clears in-memory tokenStore/handoffStore/sessionTokenStore).
 // The encryption key is derived from SESSION_SECRET, so the token is never
-// readable by the browser or GitHub Pages — it is only usable server-side.
+// readable by the browser or the Vercel frontend — it is only usable server-side.
 const ENCRYPT_ALGO = "aes-256-gcm";
 
 function deriveEncryptionKey(secret) {
@@ -238,7 +237,7 @@ function deleteTokens(sessionId) {
 }
 
 // ─── One-time handoff store (survives the cross-site redirect gap) ───
-// After OAuth callback, a random handoff code is generated and sent to GitHub Pages
+// After OAuth callback, a random handoff code is generated and sent to the Vercel frontend
 // in the redirect URL. The frontend POSTs it to /api/pinterest/complete to receive
 // a session bearer token. This eliminates the need for cross-site cookies.
 const handoffStore = new Map();
