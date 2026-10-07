@@ -63,7 +63,7 @@ function getApiBaseUrl() {
 }
 
 // Required OAuth scopes for this demo
-const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write"].join(",");
+const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write", "user_accounts:read"].join(",");
 const REQUIRED_SCOPES = SCOPES.split(",");
 
 // ─── Middleware ───
@@ -171,7 +171,8 @@ async function persistPinterestCredential(tokenData) {
     scope: tokenData.scope || SCOPES,
     pinterest_user_id: user.id,
     username: user.username || "",
-    expires_at: expiresAt
+    expires_at: expiresAt,
+    refresh_token_expires_at: tokenData.refresh_token_expires_at ? new Date(Number(tokenData.refresh_token_expires_at) * 1000).toISOString() : null
   });
   return { account, user };
 }
