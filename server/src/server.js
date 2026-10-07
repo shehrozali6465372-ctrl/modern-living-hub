@@ -15,6 +15,7 @@ import cookieSession from "cookie-session";
 import crypto from "node:crypto";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
+import { initCredentialStore, savePinterestCredential, getPinterestCredential, listPinterestCredentials, revokePinterestCredential } from "./credential-store.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 10000;
@@ -62,7 +63,7 @@ function getApiBaseUrl() {
 }
 
 /** Get the effective API token for a request (sandbox or user's OAuth token). */
-function getEffectiveToken(req) {
+async function getEffectiveToken(req) {
   if (isSandbox) return SANDBOX_TOKEN;
   return getUserToken(req);
 }
@@ -96,73 +97,7 @@ app.use(
 // NEVER in the cookie. The cookie is signed (tamper-proof) and HttpOnly (no JS access).
 // tokenStore is ephemeral — tokens are lost if the process restarts (user reconnects).
 
-// ─── Encrypted token persistence (survives Render hibernation) ───
-// Pinterest access/refresh tokens are encrypted (AES-256-GCM) and stored in a
-// dedicated HttpOnly, Secure cookie. This cookie survives Render free-tier
-// hibernation (which clears in-memory tokenStore/handoffStore/sessionTokenStore).
-// The encryption key is derived from SESSION_SECRET, so the token is never
-// readable by the browser or the Vercel frontend — it is only usable server-side.
-const ENCRYPT_ALGO = "aes-256-gcm";
-
-function deriveEncryptionKey(secret) {
-  return crypto.createHash("sha256").update(secret).digest();
-}
-
-function encryptTokenCookie(data) {
-  try {
-    const key = deriveEncryptionKey(SESSION_SECRET);
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv(ENCRYPT_ALGO, key, iv);
-    const json = JSON.stringify(data);
-    const encrypted = Buffer.concat([cipher.update(json, "utf8"), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    return iv.toString("base64") + "." + encrypted.toString("base64") + "." + tag.toString("base64");
-  } catch {
-    return null;
-  }
-}
-
-function decryptTokenCookie(encryptedStr) {
-  try {
-    if (!encryptedStr) return null;
-    const [ivB64, encB64, tagB64] = encryptedStr.split(".");
-    if (!ivB64 || !encB64 || !tagB64) return null;
-    const key = deriveEncryptionKey(SESSION_SECRET);
-    const iv = Buffer.from(ivB64, "base64");
-    const encrypted = Buffer.from(encB64, "base64");
-    const tag = Buffer.from(tagB64, "base64");
-    const decipher = crypto.createDecipheriv(ENCRYPT_ALGO, key, iv);
-    decipher.setAuthTag(tag);
-    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    return JSON.parse(decrypted.toString("utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function persistTokensCookie(res, pinterestData) {
-  const encrypted = encryptTokenCookie(pinterestData);
-  if (!encrypted) return;
-  res.cookie("mlh.ptoken", encrypted, {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "lax",
-    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
-    signed: false
-  });
-}
-
-function readTokensCookie(req) {
-  const encrypted = req.cookies["mlh.ptoken"] || req.signedCookies["mlh.ptoken"] || null;
-  return decryptTokenCookie(encrypted);
-}
-
-function clearTokensCookie(res) {
-  res.clearCookie("mlh.ptoken");
-}
-
-
-// ─── CORS ───
+// Pinterest credentials are NEVER stored in browser cookies.\n// They are encrypted at rest in the private PostgreSQL credential store.\n\n// ─── CORS ───
 // Only allow the actual frontend origin.
 // Production: https://modernlivinghub.vercel.app
 // Development: localhost origins
@@ -192,48 +127,29 @@ app.use((req, res, next) => {
   next();
 });
 
-// ─── Server-side token store (in-memory, survives hibernation within a single process) ───
-// Tokens are NEVER in the cookie. The cookie only holds an opaque session ID.
-// On Render free tier, tokens are lost if the process restarts — user reconnects.
-const tokenStore = new Map();
-const TOKEN_TTL_MS = 1000 * 60 * 60; // 1 hour
-
-function storeTokens(sessionId, pinterestData) {
-  tokenStore.set(sessionId, {
-    pinterest: pinterestData,
-    expires: Date.now() + TOKEN_TTL_MS
-  });
+// ─── Persistent credential access ───
+const tokenCache = new Map();
+const TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
+async function storeTokens(credentialId, ownerSessionId, pinterestData) {
+  const saved = await savePinterestCredential({ credential_id: credentialId, owner_session_id: ownerSessionId,
+    pinterest_user_id: pinterestData.pinterest_user_id || null, username: pinterestData.username || null,
+    access_token: pinterestData.access_token, refresh_token: pinterestData.refresh_token || null,
+    token_type: pinterestData.token_type || "bearer", scope: pinterestData.scope || SCOPES,
+    connected_at: pinterestData.connected_at || new Date().toISOString() });
+  tokenCache.set(credentialId, { pinterest: saved, expires: Date.now() + TOKEN_CACHE_TTL_MS });
+  return saved;
 }
-
-function getTokens(sessionId) {
-  const entry = tokenStore.get(sessionId);
-  if (!entry) return null;
-  if (Date.now() > entry.expires) {
-    tokenStore.delete(sessionId);
-    return null;
-  }
-  return entry.pinterest;
+async function getTokens(credentialId, ownerSessionId = null) {
+  const cached = tokenCache.get(credentialId);
+  if (cached && Date.now() <= cached.expires) return cached.pinterest;
+  if (cached) tokenCache.delete(credentialId);
+  const pinterest = await getPinterestCredential(credentialId, ownerSessionId);
+  if (pinterest?.access_token) tokenCache.set(credentialId, { pinterest, expires: Date.now() + TOKEN_CACHE_TTL_MS });
+  return pinterest;
 }
-
-
-/** Get Pinterest tokens, falling back to the encrypted cookie if in-memory store is empty (hibernation). */
-function getTokensWithCookie(req, res, sessionId) {
-  let pinterest = sessionId ? getTokens(sessionId) : null;
-  if (pinterest && pinterest.access_token) return pinterest;
-
-  // In-memory store empty (Render hibernation) — try encrypted cookie.
-  const cookieTokens = readTokensCookie(req);
-  if (cookieTokens && cookieTokens.access_token) {
-    // Rehydrate in-memory store for speed.
-    if (sessionId) storeTokens(sessionId, cookieTokens);
-    return cookieTokens;
-  }
-  return null;
-}
-
-
-function deleteTokens(sessionId) {
-  tokenStore.delete(sessionId);
+async function deleteTokens(credentialId, ownerSessionId) {
+  tokenCache.delete(credentialId);
+  return revokePinterestCredential(credentialId, ownerSessionId);
 }
 
 // ─── One-time handoff store (survives the cross-site redirect gap) ───
@@ -284,15 +200,15 @@ function createSessionToken(credentialId) {
 function getCredentialId(req) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    const entry = sessionTokenStore.get(authHeader.slice(7));
+    const bearer = authHeader.slice(7);
+    const entry = sessionTokenStore.get(bearer);
     if (entry) {
-      if (Date.now() > entry.expiresAt) sessionTokenStore.delete(authHeader.slice(7));
+      if (Date.now() > entry.expiresAt) sessionTokenStore.delete(bearer);
       else return entry.credentialId;
     }
   }
   return req.session?.pinterestCredentialId || null;
 }
-
 async function getUserToken(req) {
   const credentialId = getCredentialId(req);
   if (!credentialId) return null;
@@ -465,20 +381,21 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 
     // Store the token server-side ONLY — never in cookies or URLs.
     const connectedAt = new Date().toISOString();
+    const credentialId = crypto.randomUUID();
     const pinterestData = {
       access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token || null,
       token_type: tokenData.token_type || "bearer",
       scope: tokenData.scope || SCOPES,
       connected_at: connectedAt
     };
-    storeTokens(req.session.sessionId, pinterestData);
-    // Persist encrypted Pinterest tokens in HttpOnly cookie to survive Render hibernation.
-    persistTokensCookie(res, pinterestData);
+    await storeTokens(credentialId, req.session.sessionId, pinterestData);
+    req.session.pinterestCredentialId = credentialId;
 
     // Generate a one-time handoff code for cross-site OAuth completion.
     // The frontend will POST this code to /api/pinterest/complete to receive
     // a bearer session token — no cross-site cookies needed.
-    const handoffCode = createHandoff(req.session.sessionId);
+    const handoffCode = createHandoff(credentialId);
 
     // Clear the oauth_state (no longer needed).
     delete req.session.oauth_state;
@@ -492,9 +409,9 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 
 // ─── Step 3: OAuth status — GET /api/pinterest/status ───
 // Accepts: Authorization: Bearer <session_token> (cross-site) OR cookie (same-origin)
-app.get("/api/pinterest/status", (req, res) => {
-  const sessionId = getSessionId(req);
-  const pinterest = getTokensWithCookie(req, res, sessionId);
+app.get("/api/pinterest/status", async (req, res) => {
+  const sessionId = getCredentialId(req);
+  const pinterest = getTokens(sessionId, req.session?.sessionId || null);
 
   const scopesOk = hasRequiredScopes(pinterest);
 
@@ -528,43 +445,40 @@ app.post("/api/pinterest/complete", (req, res) => {
     return res.status(400).json({ error: "Invalid or expired handoff code." });
   }
 
-  // Verify the Pinterest tokens still exist for this session,
-  // falling back to the encrypted cookie if Render hibernation cleared tokenStore.
-  const pinterest = getTokens(entry.sessionId) || readTokensCookie(req);
-  if (!pinterest || !pinterest.access_token) {
-    return res.status(400).json({ error: "Pinterest tokens not found. Please reconnect." });
-  }
-  if (!getTokens(entry.sessionId) && pinterest) {
-    // Rehydrate in-memory store from cookie (hibernation recovery).
-    storeTokens(entry.sessionId, pinterest);
-  }
-
-  // Create an opaque bearer session token for cross-site API calls
-  const sessionToken = createSessionToken(entry.sessionId);
-
+  const pinterest = await getTokens(entry.credentialId, req.session?.sessionId || null);
+  if (!pinterest || !pinterest.access_token) return res.status(400).json({ error: "Pinterest credentials not found. Please reconnect." });
+  const sessionToken = createSessionToken(entry.credentialId);
   console.log("Handoff complete: session token created");
   res.json({ connected: true, session_token: sessionToken });
 });
 
+// ─── Step 3c: Persistent Pinterest account registry ───
+app.get("/api/pinterest/accounts", async (req, res) => {
+  const ownerSessionId = req.session?.sessionId;
+  if (!ownerSessionId) return res.status(401).json({ error: "Not authenticated." });
+  try { res.json({ accounts: await listPinterestCredentials(ownerSessionId) }); }
+  catch (err) { console.error("Pinterest account registry error:", err.message); res.status(500).json({ error: "Could not load Pinterest accounts." }); }
+});
+
 // ─── Step 4: Disconnect — POST /api/pinterest/disconnect ───
-app.post("/api/pinterest/disconnect", (req, res) => {
-  const sessionId = getSessionId(req);
-  if (sessionId) {
-    deleteTokens(sessionId);
+app.post("/api/pinterest/disconnect", async (req, res) => {
+  const credentialId = getCredentialId(req);
+  const ownerSessionId = req.session?.sessionId || null;
+  if (credentialId && ownerSessionId) {
+    await deleteTokens(credentialId, ownerSessionId);
     // Also invalidate any session tokens for this session
     for (const [token, entry] of sessionTokenStore.entries()) {
-      if (entry.sessionId === sessionId) sessionTokenStore.delete(token);
+      if (entry.credentialId === credentialId) sessionTokenStore.delete(token);
     }
   }
-  delete req.session?.sessionId;
+  delete req.session?.pinterestCredentialId;
   delete req.session?.oauth_state;
-  clearTokensCookie(res);
   res.json({ disconnected: true });
 });
 
 // ─── Step 5: Get user's boards — GET /api/pinterest/boards ───
 app.get("/api/pinterest/boards", async (req, res) => {
-  const token = getEffectiveToken(req);
+  const token = await getEffectiveToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
   }
@@ -591,7 +505,7 @@ app.get("/api/pinterest/boards", async (req, res) => {
 
 // ─── Step 5b: Verify connection — GET /api/pinterest/account ───
 app.get("/api/pinterest/account", async (req, res) => {
-  const token = getEffectiveToken(req);
+  const token = await getEffectiveToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
   }
@@ -632,7 +546,7 @@ app.get("/api/pinterest/account", async (req, res) => {
 
 // ─── Step 6: Create a Pin — POST /api/pinterest/pins ───
 app.post("/api/pinterest/pins", async (req, res) => {
-  const token = getEffectiveToken(req);
+  const token = await getEffectiveToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
   }
@@ -640,10 +554,9 @@ app.post("/api/pinterest/pins", async (req, res) => {
   // Check that the token has the required scopes (pins:write).
   // Skip in sandbox mode — the sandbox token is pre-configured with correct scopes.
   if (!isSandbox) {
-    const sessionId = getSessionId(req);
-    const tokenObj = sessionId ? getTokens(sessionId) : null;
-    const tokenCookieObj = readTokensCookie(req);
-    if (!hasRequiredScopes(tokenObj || tokenCookieObj)) {
+    const credentialId = getCredentialId(req);
+    const tokenObj = credentialId ? await getTokens(credentialId, req.session?.sessionId || null) : null;
+    if (!hasRequiredScopes(tokenObj)) {
       return res.status(403).json({
         error: "Your Pinterest token is missing required scopes (pins:write). Please disconnect and reconnect Pinterest."
       });
@@ -723,7 +636,7 @@ app.post("/api/pinterest/pins", async (req, res) => {
 
 // ─── Step 7: Create a Board — POST /api/pinterest/boards ───
 app.post("/api/pinterest/boards", async (req, res) => {
-  const token = getEffectiveToken(req);
+  const token = await getEffectiveToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not connected to Pinterest." });
   }
@@ -799,6 +712,8 @@ import { registerYouTubeRoutes } from "./youtube.js";
 registerYouTubeRoutes(app, { SESSION_SECRET, FRONTEND_URL, isProduction });
 
 // ─── Start server ───
+await initCredentialStore();
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Modern Living Hub backend running on http://0.0.0.0:${PORT}`);
   console.log(`Pinterest OAuth redirect URI: ${REDIRECT_URI}`);
