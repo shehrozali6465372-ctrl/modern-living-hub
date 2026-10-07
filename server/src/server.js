@@ -410,8 +410,8 @@ app.get("/auth/pinterest/callback", async (req, res) => {
 // ─── Step 3: OAuth status — GET /api/pinterest/status ───
 // Accepts: Authorization: Bearer <session_token> (cross-site) OR cookie (same-origin)
 app.get("/api/pinterest/status", async (req, res) => {
-  const sessionId = getCredentialId(req);
-  const pinterest = getTokens(sessionId, req.session?.sessionId || null);
+  const credentialId = getCredentialId(req);
+  const pinterest = credentialId ? await getTokens(credentialId, req.session?.sessionId || null) : null;
 
   const scopesOk = hasRequiredScopes(pinterest);
 
@@ -434,7 +434,7 @@ app.get("/api/pinterest/status", async (req, res) => {
 // ─── Step 3b: Complete OAuth handoff — POST /api/pinterest/complete ───
 // The frontend POSTs the one-time handoff code after the OAuth redirect.
 // On success, returns a bearer session token for subsequent API calls.
-app.post("/api/pinterest/complete", (req, res) => {
+app.post("/api/pinterest/complete", async (req, res) => {
   const { handoff } = req.body;
   if (!handoff || typeof handoff !== "string") {
     return res.status(400).json({ error: "Missing handoff code." });
