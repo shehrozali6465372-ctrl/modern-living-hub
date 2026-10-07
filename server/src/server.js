@@ -15,7 +15,7 @@ import cookieSession from "cookie-session";
 import crypto from "node:crypto";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
-import { initCredentialStore, savePinterestCredential, getPinterestCredential, listPinterestCredentials, revokePinterestCredential } from "./credential-store.js";
+import { listPinterestAccounts, storePinterestCredential, pinterestOperation, revokePinterestCredential } from "./ucos-credential-client.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 10000;
@@ -62,12 +62,6 @@ function getApiBaseUrl() {
   return isSandbox ? SANDBOX_API_BASE : PINTEREST_API_BASE;
 }
 
-/** Get the effective API token for a request (sandbox or user's OAuth token). */
-async function getEffectiveToken(req) {
-  if (isSandbox) return SANDBOX_TOKEN;
-  return getUserToken(req);
-}
-
 // Required OAuth scopes for this demo
 const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write"].join(",");
 const REQUIRED_SCOPES = SCOPES.split(",");
@@ -92,12 +86,7 @@ app.use(
     sameSite: isProduction ? "none" : "lax"
   })
 );
-// Security: cookie-session stores only {sessionId, oauth_state} in the cookie.
-// Pinterest access_token and refresh_token are stored server-side in tokenStore,
-// NEVER in the cookie. The cookie is signed (tamper-proof) and HttpOnly (no JS access).
-// tokenStore is ephemeral — tokens are lost if the process restarts (user reconnects).
-
-// Pinterest credentials are NEVER stored in browser cookies.\n// They are encrypted at rest in the private PostgreSQL credential store.\n\n// ─── CORS ───
+// Security: the signed HttpOnly cookie contains only non-secret session identifiers.\n// Raw Pinterest access/refresh tokens are stored only in UCOS L13 encrypted PostgreSQL.\n\n// ─── CORS ───
 // Only allow the actual frontend origin.
 // Production: https://modernlivinghub.vercel.app
 // Development: localhost origins
@@ -127,561 +116,150 @@ app.use((req, res, next) => {
   next();
 });
 
-// ─── Persistent credential access ───
-const tokenCache = new Map();
-const TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
-async function storeTokens(credentialId, ownerSessionId, pinterestData) {
-  const saved = await savePinterestCredential({ credential_id: credentialId, owner_session_id: ownerSessionId,
-    pinterest_user_id: pinterestData.pinterest_user_id || null, username: pinterestData.username || null,
-    access_token: pinterestData.access_token, refresh_token: pinterestData.refresh_token || null,
-    token_type: pinterestData.token_type || "bearer", scope: pinterestData.scope || SCOPES,
-    connected_at: pinterestData.connected_at || new Date().toISOString() });
-  tokenCache.set(credentialId, { pinterest: saved, expires: Date.now() + TOKEN_CACHE_TTL_MS });
-  return saved;
-}
-async function getTokens(credentialId, ownerSessionId = null) {
-  const cached = tokenCache.get(credentialId);
-  if (cached && Date.now() <= cached.expires) return cached.pinterest;
-  if (cached) tokenCache.delete(credentialId);
-  const pinterest = await getPinterestCredential(credentialId, ownerSessionId);
-  if (pinterest?.access_token) tokenCache.set(credentialId, { pinterest, expires: Date.now() + TOKEN_CACHE_TTL_MS });
-  return pinterest;
-}
-async function deleteTokens(credentialId, ownerSessionId) {
-  tokenCache.delete(credentialId);
-  return revokePinterestCredential(credentialId, ownerSessionId);
-}
-
-// ─── One-time handoff store (survives the cross-site redirect gap) ───
-// After OAuth callback, a random handoff code is generated and sent to the Vercel frontend
-// in the redirect URL. The frontend POSTs it to /api/pinterest/complete to receive
-// a session bearer token. This eliminates the need for cross-site cookies.
+// ─── UCOS-backed Pinterest credential boundary ───
 const handoffStore = new Map();
-const HANDOFF_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const HANDOFF_TTL_MS = 5 * 60 * 1000;
+const sessionTokenStore = new Map();
+const SESSION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
-function createHandoff(credentialId) {
+function createHandoff(accountId) {
   const code = crypto.randomBytes(32).toString("hex");
-  handoffStore.set(code, {
-    credentialId,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + HANDOFF_TTL_MS
-  });
+  handoffStore.set(code, { accountId, expiresAt: Date.now() + HANDOFF_TTL_MS });
   return code;
 }
-
 function consumeHandoff(code) {
   const entry = handoffStore.get(code);
   if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    handoffStore.delete(code);
-    return null;
-  }
-  handoffStore.delete(code); // single-use: delete immediately
-  return entry;
+  if (Date.now() > entry.expiresAt) { handoffStore.delete(code); return null; }
+  handoffStore.delete(code); return entry;
 }
-
-// ─── Session bearer token store ───
-// After the frontend completes the handoff, it receives a short-lived opaque
-// bearer token. This token maps to a sessionId whose Pinterest tokens live
-// in the in-memory tokenStore. The frontend sends it as Authorization: Bearer.
-const sessionTokenStore = new Map();
-const SESSION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-function createSessionToken(credentialId) {
+function createSessionToken(accountId) {
   const token = crypto.randomBytes(32).toString("hex");
-  sessionTokenStore.set(token, {
-    credentialId,
-    expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
-  });
+  sessionTokenStore.set(token, { accountId, expiresAt: Date.now() + SESSION_TOKEN_TTL_MS });
   return token;
 }
-
-// ─── Auth helpers ───
-function getCredentialId(req) {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const bearer = authHeader.slice(7);
-    const entry = sessionTokenStore.get(bearer);
+function getAccountId(req) {
+  const h = req.headers.authorization;
+  if (h && h.startsWith("Bearer ")) {
+    const entry = sessionTokenStore.get(h.slice(7));
     if (entry) {
-      if (Date.now() > entry.expiresAt) sessionTokenStore.delete(bearer);
-      else return entry.credentialId;
+      if (Date.now() > entry.expiresAt) sessionTokenStore.delete(h.slice(7));
+      else return entry.accountId;
     }
   }
-  return req.session?.pinterestCredentialId || null;
+  return req.session?.pinterestAccountId || null;
 }
-async function getUserToken(req) {
-  const credentialId = getCredentialId(req);
-  if (!credentialId) return null;
-  const pinterest = await getTokens(credentialId, req.session?.sessionId || null);
-  return pinterest?.access_token || null;
+async function fetchPinterestUser(accessToken) {
+  const response = await fetch(`${PINTEREST_API_BASE}/user_account`, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.id) throw new Error("Pinterest user account lookup failed");
+  return data;
 }
-
-/** Create a secure random state value for OAuth CSRF protection. */
-function createState() {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-/** Check if token has all required scopes. */
-function hasRequiredScopes(pinterest) {
-  if (!pinterest || !pinterest.scope) return false;
-  const granted = pinterest.scope.split(/\s+/);
-  return REQUIRED_SCOPES.every(s => granted.includes(s));
-}
-
-/** Build the Pinterest OAuth authorization URL. */
-function buildAuthUrl(state, prompt) {
-  const params = new URLSearchParams({
-    client_id: CLIENT_ID,
-    redirect_uri: REDIRECT_URI,
-    response_type: "code",
-    scope: SCOPES,
-    state
+async function persistPinterestCredential(tokenData) {
+  const user = await fetchPinterestUser(tokenData.access_token);
+  const accounts = await listPinterestAccounts();
+  const account = accounts.find(a => String(a.platform_account_id || "") === String(user.id) || String(a.external_account_id || "") === String(user.id));
+  if (!account) throw new Error("Pinterest account is not registered in UCOS");
+  const expiresAt = tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : null;
+  await storePinterestCredential({
+    account_id: account.account_id,
+    platform_account_id: account.platform_account_id,
+    credential_ref: account.credentials_ref,
+    access_token: tokenData.access_token,
+    refresh_token: tokenData.refresh_token || "",
+    token_type: tokenData.token_type || "bearer",
+    scope: tokenData.scope || SCOPES,
+    pinterest_user_id: user.id,
+    username: user.username || "",
+    expires_at: expiresAt
   });
+  return { account, user };
+}
+function createState() { return crypto.randomBytes(32).toString("hex"); }
+function buildAuthUrl(state, prompt) {
+  const params = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: SCOPES, state });
   if (prompt) params.set("prompt", prompt);
   return `${PINTEREST_OAUTH_URL}?${params.toString()}`;
 }
 
 // ─── Routes ───
-
-// Health check — safe diagnostics, never exposes secrets
 app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "modern-living-hub-backend",
-    pinterest_client_id_configured: Boolean(CLIENT_ID),
-    redirect_uri_configured: Boolean(REDIRECT_URI),
-    frontend_url_configured: Boolean(FRONTEND_URL),
-    production_mode: isProduction,
-    sandbox_mode: isSandbox
-  });
+  res.json({ status:"ok", service:"modern-living-hub-backend", pinterest_client_id_configured:Boolean(CLIENT_ID), redirect_uri_configured:Boolean(REDIRECT_URI), frontend_url_configured:Boolean(FRONTEND_URL), ucos_vault_configured:Boolean(process.env.UCOS_API_TOKEN), production_mode:isProduction, sandbox_mode:isSandbox });
 });
-
-// ─── Step 1: Start OAuth — GET /auth/pinterest ───
-app.get("/auth/pinterest", (req, res) => {
-  const state = createState();
-  if (!req.session.sessionId) {
-    req.session.sessionId = crypto.randomUUID();
-  }
-  req.session.oauth_state = state;
-  // Also store state in a signed cookie so it survives server restarts / in-memory session wipes.
-  // On Render free tier the service can hibernate between OAuth start and callback,
-  // clearing the in-memory session store. The cookie persists in the browser.
-  res.cookie("mlh.oauth_state", state, {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "lax",
-    maxAge: 1000 * 60 * 10, // 10 minutes — enough for the OAuth flow
-    signed: true
-  });
-  const prompt = req.query.prompt || null;
-  if (prompt) {
-    console.log("OAuth start: prompt=" + prompt + " (forced reauthorization)");
-  }
-  console.log("OAuth start: state generated (length=" + state.length + "), session present=" + Boolean(req.session));
-  res.redirect(buildAuthUrl(state, prompt));
+app.get("/auth/pinterest", (req,res) => {
+  const state=createState(); if(!req.session.sessionId) req.session.sessionId=crypto.randomUUID(); req.session.oauth_state=state;
+  res.cookie("mlh.oauth_state",state,{httpOnly:true,secure:isProduction,sameSite:isProduction?"none":"lax",maxAge:600000,signed:true});
+  res.redirect(buildAuthUrl(state,req.query.prompt||null));
 });
-
-// ─── Step 2: OAuth callback — GET /auth/pinterest/callback ───
-app.get("/auth/pinterest/callback", async (req, res) => {
-  const { code, state, error, error_description } = req.query;
-  // Read the backup state from the signed cookie (survives server restarts).
-  const cookieState = req.signedCookies["mlh.oauth_state"] || null;
-  console.log("OAuth callback: session present=" + Boolean(req.session) + ", session_state present=" + Boolean(req.session.oauth_state) + ", cookie_state present=" + Boolean(cookieState) + ", callback_state present=" + Boolean(state));
-
-  // Handle OAuth denial
-  if (error) {
-    const msg =
-      error === "access_denied"
-        ? "You denied the Pinterest authorization request."
-        : error_description || "Pinterest authorization failed.";
-    res.clearCookie("mlh.oauth_state");
-    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(msg)}`);
-  }
-
-  if (!code || !state) {
-    res.clearCookie("mlh.oauth_state");
-    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Missing authorization code or state.`);
-  }
-
-  // Validate state (CSRF protection) — check session first, then signed cookie backup.
-  const sessionState = req.session.oauth_state || null;
-  const stateValid = (sessionState && state === sessionState) || (cookieState && state === cookieState);
-
-  if (!stateValid) {
-    console.log("OAuth state validation FAILED: session_state present=" + Boolean(sessionState) + ", cookie_state present=" + Boolean(cookieState) + ", callback_state present=" + Boolean(state));
-    res.clearCookie("mlh.oauth_state");
-    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Invalid OAuth state. Please try again.`);
-  }
-  console.log("OAuth state validation PASSED");
-  delete req.session.oauth_state;
-  res.clearCookie("mlh.oauth_state");
-
+app.get("/auth/pinterest/callback", async (req,res) => {
+  const {code,state,error,error_description}=req.query;
+  const cookieState=req.signedCookies["mlh.oauth_state"]||null;
+  if(error){res.clearCookie("mlh.oauth_state");return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(error==="access_denied"?"You denied the Pinterest authorization request.":error_description||"Pinterest authorization failed.")}`);}
+  if(!code||!state){res.clearCookie("mlh.oauth_state");return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Missing authorization code or state.`);}
+  const sessionState=req.session.oauth_state||null;
+  if(!((sessionState&&state===sessionState)||(cookieState&&state===cookieState))){res.clearCookie("mlh.oauth_state");return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Invalid OAuth state. Please try again.`);}
+  delete req.session.oauth_state; res.clearCookie("mlh.oauth_state");
   try {
-    // Exchange authorization code for access token
-    // Pinterest requires HTTP Basic Authentication (not client_id/client_secret in body).
-    const credentials = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
-    const body = new URLSearchParams({
-      grant_type: "authorization_code",
-      code: code.toString(),
-      redirect_uri: REDIRECT_URI
-    });
-
-    // Diagnostic: confirm the token exchange parameters (no secrets logged)
-    console.log("Token exchange request:", JSON.stringify({
-      url: PINTEREST_TOKEN_URL,
-      grant_type: "authorization_code",
-      code_length: code.toString().length,
-      redirect_uri: REDIRECT_URI,
-      auth_header_present: true
-    }));
-
-    let tokenRes;
-    try {
-      tokenRes = await fetch(PINTEREST_TOKEN_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: `Basic ${credentials}`
-        },
-        body: body.toString()
-      });
-      console.log("TOKEN FETCH COMPLETED");
-      console.log("Token exchange response status:", tokenRes.status);
-      console.log("Token exchange response content-type:", tokenRes.headers.get("content-type"));
-    } catch (fetchErr) {
-      console.error("TOKEN FETCH EXCEPTION:", fetchErr?.message || String(fetchErr));
-      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Network error during token exchange.")}`);
-    }
-
-    const rawText = await tokenRes.text();
-
-    let tokenData;
-    try {
-      tokenData = JSON.parse(rawText);
-    } catch {
-      tokenData = {};
-    }
-
-    if (!tokenRes.ok) {
-      const errDesc = tokenData.error_description || "HTTP " + tokenRes.status;
-      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code for access token. Pinterest error: " + errDesc)}`);
-    }
-
-    if (!tokenData.access_token) {
-      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=No access token returned by Pinterest.`);
-    }
-
-    // Log safe diagnostics only — never access_token, refresh_token, or raw body.
-    console.log("Token exchange success:", JSON.stringify({
-      status: tokenRes.status,
-      token_received: Boolean(tokenData.access_token),
-      refresh_token_received: Boolean(tokenData.refresh_token),
-      scope: tokenData.scope || null
-    }));
-
-    // Store the token server-side ONLY — never in cookies or URLs.
-    const connectedAt = new Date().toISOString();
-    const credentialId = crypto.randomUUID();
-    const pinterestData = {
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token || null,
-      token_type: tokenData.token_type || "bearer",
-      scope: tokenData.scope || SCOPES,
-      connected_at: connectedAt
-    };
-    await storeTokens(credentialId, req.session.sessionId, pinterestData);
-    req.session.pinterestCredentialId = credentialId;
-
-    // Generate a one-time handoff code for cross-site OAuth completion.
-    // The frontend will POST this code to /api/pinterest/complete to receive
-    // a bearer session token — no cross-site cookies needed.
-    const handoffCode = createHandoff(credentialId);
-
-    // Clear the oauth_state (no longer needed).
-    delete req.session.oauth_state;
-    console.log("Callback complete: tokens stored, handoff created. Redirecting to frontend.");
+    const basic=Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
+    const body=new URLSearchParams({grant_type:"authorization_code",code:code.toString(),redirect_uri:REDIRECT_URI});
+    const tokenRes=await fetch(PINTEREST_TOKEN_URL,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded",Authorization:`Basic ${basic}`},body:body.toString()});
+    const tokenData=await tokenRes.json().catch(()=>({}));
+    if(!tokenRes.ok||!tokenData.access_token){const detail=tokenData.error_description||`HTTP ${tokenRes.status}`;return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code: "+detail)}`);}
+    const stored=await persistPinterestCredential(tokenData);
+    req.session.pinterestAccountId=stored.account.account_id;
+    const handoffCode=createHandoff(stored.account.account_id);
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1&handoff=${handoffCode}`);
-  } catch (err) {
-    console.error("OAuth callback error:", err.message);
-    res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Network error during Pinterest authentication.")}`);
+  } catch(err) {
+    console.error("Pinterest OAuth callback failed:",err?.message||String(err));
+    res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(err?.message||"Pinterest authentication failed.")}`);
   }
 });
-
-// ─── Step 3: OAuth status — GET /api/pinterest/status ───
-// Accepts: Authorization: Bearer <session_token> (cross-site) OR cookie (same-origin)
-app.get("/api/pinterest/status", async (req, res) => {
-  const credentialId = getCredentialId(req);
-  const pinterest = credentialId ? await getTokens(credentialId, req.session?.sessionId || null) : null;
-
-  const scopesOk = hasRequiredScopes(pinterest);
-
-  console.log("Status check:", JSON.stringify({
-    auth_method: req.headers.authorization ? "bearer" : "cookie",
-    connected: Boolean(pinterest?.access_token),
-    scopes_ok: scopesOk
-  }));
-
-  if (!pinterest || !pinterest.access_token) {
-    return res.json({ connected: false });
-  }
-  if (!scopesOk) {
-    return res.json({ connected: false, needs_reauth: true,
-      error: "Token is missing required Pinterest scopes (pins:write). Please reconnect." });
-  }
-  res.json({ connected: true, connected_at: pinterest.connected_at });
+app.get("/api/pinterest/status",async(req,res)=>{
+  const accountId=getAccountId(req); if(!accountId)return res.json({connected:false});
+  try{const result=await pinterestOperation(accountId,"account");res.json({connected:true,id:result?.data?.id||null,username:result?.data?.username||null});}
+  catch{res.json({connected:false,needs_reauth:true});}
+});
+app.post("/api/pinterest/complete",async(req,res)=>{
+  const {handoff}=req.body; if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});
+  const entry=consumeHandoff(handoff); if(!entry)return res.status(400).json({error:"Invalid or expired handoff code."});
+  try{await pinterestOperation(entry.accountId,"account");res.json({connected:true,session_token:createSessionToken(entry.accountId)});}
+  catch{res.status(400).json({error:"Pinterest credentials are not available in UCOS. Please reconnect."});}
+});
+app.get("/api/pinterest/accounts",async(req,res)=>{
+  try{const accounts=await listPinterestAccounts();res.json({accounts:accounts.map(a=>({account_id:a.account_id,platform_account_id:a.platform_account_id,external_account_id:a.external_account_id,display_name:a.display_name,niche:a.niche,credential_ref:a.credentials_ref}))});}
+  catch(err){console.error("Pinterest account registry error:",err?.message||String(err));res.status(500).json({error:"Could not load Pinterest accounts."});}
+});
+app.post("/api/pinterest/disconnect",async(req,res)=>{
+  const accountId=getAccountId(req);
+  if(accountId){try{const accounts=await listPinterestAccounts();const account=accounts.find(a=>a.account_id===accountId);if(account?.credentials_ref)await revokePinterestCredential(accountId,account.credentials_ref);}catch(err){console.error("Pinterest credential revoke failed:",err?.message||String(err));}
+    for(const [token,entry] of sessionTokenStore.entries())if(entry.accountId===accountId)sessionTokenStore.delete(token);}
+  delete req.session.pinterestAccountId; delete req.session.oauth_state; res.json({disconnected:true});
+});
+app.get("/api/pinterest/boards",async(req,res)=>{
+  const accountId=getAccountId(req);if(!accountId)return res.status(401).json({error:"Not connected to Pinterest."});
+  try{const result=await pinterestOperation(accountId,"boards");res.json({boards:result?.data?.items||[]});}
+  catch{res.status(502).json({error:"Could not reach Pinterest API through UCOS."});}
+});
+app.get("/api/pinterest/account",async(req,res)=>{
+  const accountId=getAccountId(req);if(!accountId)return res.status(401).json({error:"Not connected to Pinterest."});
+  try{const result=await pinterestOperation(accountId,"account");const data=result?.data||{};res.json({connected:true,id:data.id||null,username:data.username||null,display_name:data.display_name||null,profile_image:data.profile_image||null,website_url:data.website_url||null});}
+  catch{res.status(401).json({error:"Pinterest credential is invalid or expired. Please reconnect."});}
+});
+app.post("/api/pinterest/pins",async(req,res)=>{
+  const accountId=getAccountId(req);if(!accountId)return res.status(401).json({error:"Not connected to Pinterest."});
+  const {board_id,title,description,image_url,destination_url}=req.body;
+  if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});
+  try{const result=await pinterestOperation(accountId,"create_pin",{board_id:String(board_id),title:String(title),description:String(description||""),image_url:String(image_url),destination_url:String(destination_url)});const data=result?.data||{};res.json({success:true,pin:{id:data.id,title:data.title,link:data.link,board_id:data.board_id,created_at:data.created_at}});}
+  catch(err){res.status(502).json({error:err?.message||"Pinterest rejected the Pin request."});}
+});
+app.post("/api/pinterest/boards",async(req,res)=>{
+  const accountId=getAccountId(req);if(!accountId)return res.status(401).json({error:"Not connected to Pinterest."});
+  const {name,description}=req.body;if(!name)return res.status(400).json({error:"Board name is required."});
+  try{const result=await pinterestOperation(accountId,"create_board",{name:String(name),description:String(description||"")});const data=result?.data||{};res.json({success:true,board:{id:data.id,name:data.name,description:data.description}});}
+  catch(err){res.status(502).json({error:err?.message||"Pinterest rejected the board request."});}
 });
 
-// ─── Step 3b: Complete OAuth handoff — POST /api/pinterest/complete ───
-// The frontend POSTs the one-time handoff code after the OAuth redirect.
-// On success, returns a bearer session token for subsequent API calls.
-app.post("/api/pinterest/complete", async (req, res) => {
-  const { handoff } = req.body;
-  if (!handoff || typeof handoff !== "string") {
-    return res.status(400).json({ error: "Missing handoff code." });
-  }
-
-  const entry = consumeHandoff(handoff);
-  if (!entry) {
-    return res.status(400).json({ error: "Invalid or expired handoff code." });
-  }
-
-  const pinterest = await getTokens(entry.credentialId, req.session?.sessionId || null);
-  if (!pinterest || !pinterest.access_token) return res.status(400).json({ error: "Pinterest credentials not found. Please reconnect." });
-  const sessionToken = createSessionToken(entry.credentialId);
-  console.log("Handoff complete: session token created");
-  res.json({ connected: true, session_token: sessionToken });
-});
-
-// ─── Step 3c: Persistent Pinterest account registry ───
-app.get("/api/pinterest/accounts", async (req, res) => {
-  const ownerSessionId = req.session?.sessionId;
-  if (!ownerSessionId) return res.status(401).json({ error: "Not authenticated." });
-  try { res.json({ accounts: await listPinterestCredentials(ownerSessionId) }); }
-  catch (err) { console.error("Pinterest account registry error:", err.message); res.status(500).json({ error: "Could not load Pinterest accounts." }); }
-});
-
-// ─── Step 4: Disconnect — POST /api/pinterest/disconnect ───
-app.post("/api/pinterest/disconnect", async (req, res) => {
-  const credentialId = getCredentialId(req);
-  const ownerSessionId = req.session?.sessionId || null;
-  if (credentialId && ownerSessionId) {
-    await deleteTokens(credentialId, ownerSessionId);
-    // Also invalidate any session tokens for this session
-    for (const [token, entry] of sessionTokenStore.entries()) {
-      if (entry.credentialId === credentialId) sessionTokenStore.delete(token);
-    }
-  }
-  delete req.session?.pinterestCredentialId;
-  delete req.session?.oauth_state;
-  res.json({ disconnected: true });
-});
-
-// ─── Step 5: Get user's boards — GET /api/pinterest/boards ───
-app.get("/api/pinterest/boards", async (req, res) => {
-  const token = await getEffectiveToken(req);
-  if (!token) {
-    return res.status(401).json({ error: "Not connected to Pinterest." });
-  }
-
-  try {
-    const apiRes = await fetch(`${getApiBaseUrl()}/boards`, {
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-
-    const data = await apiRes.json().catch(() => ({}));
-
-    if (!apiRes.ok) {
-      return handleApiError(apiRes.status, res);
-    }
-
-    res.json({ boards: data.items || [] });
-  } catch (err) {
-    console.error("Board fetch error:", err.message);
-    res.status(502).json({ error: "Could not reach Pinterest API." });
-  }
-});
-
-// ─── Step 5b: Verify connection — GET /api/pinterest/account ───
-app.get("/api/pinterest/account", async (req, res) => {
-  const token = await getEffectiveToken(req);
-  if (!token) {
-    return res.status(401).json({ error: "Not connected to Pinterest." });
-  }
-
-  try {
-    const apiRes = await fetch(`${getApiBaseUrl()}/user_account`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-
-    if (apiRes.status === 401 || apiRes.status === 403) {
-      return res.status(apiRes.status).json({
-        error: apiRes.status === 401
-          ? "Pinterest token is invalid or expired. Please reconnect."
-          : "Pinterest permission is missing. Verify app scopes."
-      });
-    }
-
-    if (!apiRes.ok) {
-      return handleApiError(apiRes.status, res);
-    }
-
-    const data = await apiRes.json();
-
-    // Return only safe, non-sensitive account fields.
-    res.json({
-      connected: true,
-      id: data.id || null,
-      username: data.username || null,
-      display_name: data.display_name || null,
-      profile_image: data.profile_image || null,
-      website_url: data.website_url || null
-    });
-  } catch (err) {
-    console.error("Account fetch error:", err.message);
-    res.status(502).json({ error: "Could not reach Pinterest API." });
-  }
-});
-
-// ─── Step 6: Create a Pin — POST /api/pinterest/pins ───
-app.post("/api/pinterest/pins", async (req, res) => {
-  const token = await getEffectiveToken(req);
-  if (!token) {
-    return res.status(401).json({ error: "Not connected to Pinterest." });
-  }
-
-  // Check that the token has the required scopes (pins:write).
-  // Skip in sandbox mode — the sandbox token is pre-configured with correct scopes.
-  if (!isSandbox) {
-    const credentialId = getCredentialId(req);
-    const tokenObj = credentialId ? await getTokens(credentialId, req.session?.sessionId || null) : null;
-    if (!hasRequiredScopes(tokenObj)) {
-      return res.status(403).json({
-        error: "Your Pinterest token is missing required scopes (pins:write). Please disconnect and reconnect Pinterest."
-      });
-    }
-  }
-
-  const { board_id, title, description, image_url, destination_url } = req.body;
-
-  // Validate required fields
-  if (!board_id || !title || !image_url || !destination_url) {
-    return res.status(400).json({
-      error: "Board, title, image URL, and destination URL are required."
-    });
-  }
-
-  const pinData = {
-    board_id: board_id.toString(),
-    title: title.toString(),
-    description: (description || "").toString(),
-    media_source: {
-      source_type: "image_url",
-      url: image_url.toString(),
-      is_standard: true
-    },
-    link: destination_url.toString()
-  };
-
-  try {
-    const apiRes = await fetch(`${getApiBaseUrl()}/pins`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(pinData)
-    });
-
-    const data = await apiRes.json().catch(() => ({}));
-
-    if (!apiRes.ok) {
-      // Log safe Pinterest error diagnostics — never log tokens or secrets.
-      console.error("Pin creation Pinterest error:", JSON.stringify({
-        http_status: apiRes.status,
-        pinterest_code: data.code || null,
-        pinterest_message: data.message || null,
-        pinterest_error: data.error || null,
-        pinterest_error_description: data.error_description || null,
-        request_id: data.request_id || data.http_request_id || null
-      }));
-      // Return a useful but safe error message to the frontend.
-      // Include error_description (e.g. scope info) when it differs from message.
-      var detail = data.message || data.error_description || data.error || "Unknown Pinterest error";
-      if (data.error_description && data.error_description !== data.message) {
-        detail += " — " + data.error_description;
-      }
-      var code = data.code ? " [" + data.code + "]" : "";
-      return res.status(apiRes.status).json({
-        error: "Pinterest rejected the request" + code + ": " + detail
-      });
-    }
-
-    res.json({
-      success: true,
-      pin: {
-        id: data.id,
-        title: data.title,
-        link: data.link,
-        board_id: data.board_id,
-        created_at: data.created_at
-      }
-    });
-  } catch (err) {
-    console.error("Pin creation error:", err.message);
-    res.status(502).json({ error: "Could not reach Pinterest API." });
-  }
-});
-
-// ─── Step 7: Create a Board — POST /api/pinterest/boards ───
-app.post("/api/pinterest/boards", async (req, res) => {
-  const token = await getEffectiveToken(req);
-  if (!token) {
-    return res.status(401).json({ error: "Not connected to Pinterest." });
-  }
-
-  const { name, description } = req.body;
-
-  if (!name) {
-    return res.status(400).json({ error: "Board name is required." });
-  }
-
-  const boardData = {
-    name: name.toString(),
-    description: (description || "").toString()
-  };
-
-  try {
-    const apiRes = await fetch(`${getApiBaseUrl()}/boards`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(boardData)
-    });
-
-    const data = await apiRes.json().catch(() => ({}));
-
-    if (!apiRes.ok) {
-      return handleApiError(apiRes.status, res);
-    }
-
-    res.json({
-      success: true,
-      board: {
-        id: data.id,
-        name: data.name,
-        description: data.description
-      }
-    });
-  } catch (err) {
-    console.error("Board creation error:", err.message);
-    res.status(502).json({ error: "Could not reach Pinterest API." });
-  }
-});
-
+// ─── API error handling helper ───
 // ─── API error handling helper ───
 function handleApiError(status, res) {
   switch (status) {
@@ -712,8 +290,6 @@ import { registerYouTubeRoutes } from "./youtube.js";
 registerYouTubeRoutes(app, { SESSION_SECRET, FRONTEND_URL, isProduction });
 
 // ─── Start server ───
-await initCredentialStore();
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Modern Living Hub backend running on http://0.0.0.0:${PORT}`);
   console.log(`Pinterest OAuth redirect URI: ${REDIRECT_URI}`);
