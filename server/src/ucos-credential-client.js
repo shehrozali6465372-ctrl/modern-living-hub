@@ -45,3 +45,11 @@ export async function pinterestOperation(accountId, operation, payload = {}) {
     body: JSON.stringify({ account_id: accountId, operation, payload }),
   });
 }
+
+
+export async function revokePinterestCredential(accountId, credentialRef) {
+  return request("/credentials/pinterest/revoke", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, credential_ref: credentialRef }),
+  });
+}
