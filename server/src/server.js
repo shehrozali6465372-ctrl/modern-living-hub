@@ -243,10 +243,10 @@ function deleteTokens(sessionId) {
 const handoffStore = new Map();
 const HANDOFF_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-function createHandoff(sessionId) {
+function createHandoff(credentialId) {
   const code = crypto.randomBytes(32).toString("hex");
   handoffStore.set(code, {
-    sessionId,
+    credentialId,
     createdAt: Date.now(),
     expiresAt: Date.now() + HANDOFF_TTL_MS
   });
@@ -271,68 +271,33 @@ function consumeHandoff(code) {
 const sessionTokenStore = new Map();
 const SESSION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-function createSessionToken(sessionId) {
+function createSessionToken(credentialId) {
   const token = crypto.randomBytes(32).toString("hex");
   sessionTokenStore.set(token, {
-    sessionId,
+    credentialId,
     expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
   });
   return token;
 }
 
-function resolveSessionToken(token) {
-  const entry = sessionTokenStore.get(token);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    sessionTokenStore.delete(token);
-    return null;
-  }
-  return entry.sessionId;
-}
-
-function deleteSessionToken(token) {
-  const entry = sessionTokenStore.get(token);
-  sessionTokenStore.delete(token);
-  return entry ? entry.sessionId : null;
-}
-
 // ─── Auth helpers ───
-
-/** Resolve the authenticated user's Pinterest access token from the request. */
-function getUserToken(req) {
-  // 1. Check Authorization header (primary — cross-site safe)
+function getCredentialId(req) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    const bearerToken = authHeader.slice(7);
-    const sessionId = resolveSessionToken(bearerToken);
-    if (sessionId) {
-      const pinterest = getTokens(sessionId);
-      if (pinterest && pinterest.access_token) return pinterest.access_token;
-      // In-memory empty after hibernation — try encrypted cookie.
-      const cookieTokens = readTokensCookie(req);
-      if (cookieTokens && cookieTokens.access_token) {
-        storeTokens(sessionId, cookieTokens);
-        return cookieTokens.access_token;
-      }
+    const entry = sessionTokenStore.get(authHeader.slice(7));
+    if (entry) {
+      if (Date.now() > entry.expiresAt) sessionTokenStore.delete(authHeader.slice(7));
+      else return entry.credentialId;
     }
   }
-  // 2. Fallback: cookie-based session (same-origin only)
-  const pinterest = getTokens(req.session?.sessionId);
-  if (pinterest && pinterest.access_token) return pinterest.access_token;
-  return null;
+  return req.session?.pinterestCredentialId || null;
 }
 
-/** Resolve sessionId from request (for status, disconnect, etc.) */
-function getSessionId(req) {
-  // 1. Check Authorization header
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    const bearerToken = authHeader.slice(7);
-    const sessionId = resolveSessionToken(bearerToken);
-    if (sessionId) return sessionId;
-  }
-  // 2. Fallback: cookie-based session
-  return req.session?.sessionId || null;
+async function getUserToken(req) {
+  const credentialId = getCredentialId(req);
+  if (!credentialId) return null;
+  const pinterest = await getTokens(credentialId, req.session?.sessionId || null);
+  return pinterest?.access_token || null;
 }
 
 /** Create a secure random state value for OAuth CSRF protection. */
