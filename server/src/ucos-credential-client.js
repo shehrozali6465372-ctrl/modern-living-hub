@@ -18,14 +18,9 @@ async function request(path, options = {}, retryTransient = false) {
     ...(options.headers || {}),
   };
 
-  // Render Free services can take several minutes to recover from idle or a
-  // transient gateway 502. Retry only safe reads; never automatically replay
-  // credential writes.
-  // Retry only safe reads; never automatically replay credential writes.
-  // Render Free may return gateway 502s for longer than a single cold-start window.
-  // Account inventory is idempotent, so keep retrying transient gateway failures
-  // for a bounded recovery window instead of failing OAuth on the first wake-up.
-  const retryDelaysMs = [3000, 5000, 8000, 12000, 15000, 15000, 20000, 20000, 20000, 20000, 20000, 20000];
+  // Keep OAuth callback work below typical proxy/request deadlines. Only safe
+  // reads may retry; never replay account/credential writes automatically.
+  const retryDelaysMs = [1000, 2000];
   const attempts = retryTransient ? retryDelaysMs.length + 1 : 1;
   let lastError;
 
@@ -34,7 +29,7 @@ async function request(path, options = {}, retryTransient = false) {
       const response = await fetch(`${BASE}${path}`, {
         ...options,
         headers,
-        ...(retryTransient ? { signal: AbortSignal.timeout(15000) } : {}),
+        ...(retryTransient ? { signal: AbortSignal.timeout(7000) } : {}),
       });
       const raw = await response.text();
       let body = {};
@@ -61,19 +56,15 @@ async function request(path, options = {}, retryTransient = false) {
 let warmupPromise = null;
 
 export function warmUcosService() {
-  // Share one wake-up loop across the OAuth-start route and the account lookup.
+  // Start warming from the OAuth-start route, in the background only.
   if (warmupPromise) return warmupPromise;
   warmupPromise = (async () => {
-    // Render Free services can need about a minute to wake after idle.
-    // Spread probes across a longer window, retrying only this safe GET.
-    // Probe across a longer cold-start window. /healthz is intentionally
-    // lightweight and does not depend on PostgreSQL being ready.
-    const delays = [0, 5000, 10000, 15000, 20000, 20000, 20000, 20000, 20000, 20000];
+    const delays = [0, 5000, 10000, 15000, 20000, 20000];
     let lastError;
     for (let attempt = 0; attempt < delays.length; attempt += 1) {
       if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
       try {
-        const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(12000) });
+        const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(8000) });
         if (response.ok) {
           console.info("[pinterest] UCOS health preflight passed", { attempt: attempt + 1, status: response.status });
           return true;
@@ -83,9 +74,7 @@ export function warmUcosService() {
         lastError = error;
       }
     }
-    // Account lookup still has a separate retry policy, so a failed probe
-    // must not silently be treated as proof that credentials/authentication failed.
-    console.warn("[pinterest] UCOS health preflight did not pass; proceeding to account lookup", {
+    console.warn("[pinterest] UCOS health preflight did not pass", {
       error: String(lastError?.message || lastError || "unknown"),
     });
     return false;
@@ -94,8 +83,9 @@ export function warmUcosService() {
 }
 
 export async function listPinterestAccounts() {
-  await warmUcosService();
-  // Retry only this idempotent read to cover Render cold-start and transient gateway failures.
+  // Do NOT await the long health warm-up here. The OAuth callback is behind a
+  // public reverse proxy; waiting for a full cold-start window can itself
+  // produce a 502 even if UCOS later becomes healthy. Use short bounded retries.
   const result = await request("/accounts?platform=pinterest", {}, true);
   return Array.isArray(result?.data?.accounts) ? result.data.accounts : [];
 }
