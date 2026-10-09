@@ -3,7 +3,7 @@
  * Raw Pinterest OAuth tokens are sent only server-to-server to UCOS and are
  * never returned by this module to browser callers.
  */
-const BASE = (process.env.UCOS_API_BASE_URL || "https://ucos-backend.onrender.com").replace(/\\/+$/, "");
+const BASE = (process.env.UCOS_API_BASE_URL || "https://ucos-backend.onrender.com").replace(/\/+$/, "");
 const TOKEN = String(process.env.UCOS_API_TOKEN || "").trim();
 
 function requireConfig() {
