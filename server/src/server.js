@@ -242,7 +242,15 @@ app.get("/auth/pinterest/callback", async (req,res) => {
     const body=new URLSearchParams({grant_type:"authorization_code",code:code.toString(),redirect_uri:REDIRECT_URI});
     const tokenRes=await fetch(PINTEREST_TOKEN_URL,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded",Authorization:`Basic ${basic}`},body:body.toString()});
     const tokenData=await tokenRes.json().catch(()=>({}));
-    if(!tokenRes.ok||!tokenData.access_token){const detail=tokenData.error_description||`HTTP ${tokenRes.status}`;return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code: "+detail)}`);}
+    if(!tokenRes.ok||!tokenData.access_token){
+      // Log only Pinterest error metadata, never credentials, code, or token values.
+      const safeError = String(tokenData.error || tokenData.message || tokenData.error_description || `HTTP ${tokenRes.status}`).slice(0, 180);
+      console.error("[pinterest] token exchange rejected", JSON.stringify({ status: tokenRes.status, error: safeError }));
+      const detail = tokenRes.status === 401
+        ? "Pinterest returned HTTP 401 during token exchange. Verify the Render Pinterest client ID and secret belong to the same app, and retry with a fresh authorization code."
+        : tokenData.error_description || `HTTP ${tokenRes.status}`;
+      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code: "+detail)}`);
+    }
     const stored=await persistPinterestCredential(tokenData);
     req.session.pinterestAccountId=stored.account.account_id;
     const handoffCode=createHandoff(stored.account.account_id);
