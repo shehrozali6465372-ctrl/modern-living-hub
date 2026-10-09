@@ -258,9 +258,13 @@ app.get("/auth/pinterest/callback", async (req,res) => {
       // Log only Pinterest error metadata, never credentials, code, or token values.
       const safeError = String(tokenData.error || tokenData.message || tokenData.error_description || `HTTP ${tokenRes.status}`).slice(0, 180);
       console.error("[pinterest] token exchange rejected", JSON.stringify({ status: tokenRes.status, error: safeError }));
-      const detail = tokenRes.status === 401
-        ? "Pinterest returned HTTP 401 during token exchange. Verify the Render Pinterest client ID and secret belong to the same app, and retry with a fresh authorization code."
-        : tokenData.error_description || `HTTP ${tokenRes.status}`;
+      const grantError = /authorization grant is invalid|invalid_grant|authorization code.*(invalid|expired|used)/i.test(safeError);
+      const clientError = /invalid client|client authentication|unauthorized client|invalid_client/i.test(safeError);
+      const detail = grantError
+        ? "Pinterest rejected this authorization code because it is invalid, expired, or already used. Start a new Connect Pinterest flow; do not refresh or reuse the callback URL."
+        : clientError
+          ? "Pinterest rejected client authentication. Verify PINTEREST_CLIENT_ID and PINTEREST_CLIENT_SECRET are the matching credentials for the same Pinterest app in Render."
+          : tokenData.error_description || safeError || `HTTP ${tokenRes.status}`;
       return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code: "+detail)}`);
     }
     const stored=await persistPinterestCredential(tokenData);
