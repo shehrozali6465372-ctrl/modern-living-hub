@@ -17,7 +17,7 @@ async function request(path, options = {}, retryTransient = false) {
     Authorization: `Bearer ${TOKEN}`,
     ...(options.headers || {}),
   };
-  const attempts = retryTransient ? 3 : 1;
+  const attempts = retryTransient ? 5 : 1;
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -35,7 +35,8 @@ async function request(path, options = {}, retryTransient = false) {
       }
       lastError = error;
     }
-    await new Promise(resolve => setTimeout(resolve, 400 * attempt));
+    // Allow a sleeping Render free service time to wake; cap the total retry wait at 15 seconds.
+    await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** (attempt - 1))));
   }
   throw lastError || new Error("UCOS request failed");
 }
