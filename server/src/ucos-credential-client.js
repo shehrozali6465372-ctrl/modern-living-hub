@@ -18,9 +18,10 @@ async function request(path, options = {}, retryTransient = false) {
     ...(options.headers || {}),
   };
 
-  // Keep OAuth callback work below typical proxy/request deadlines. Only safe
-  // reads may retry; never replay account/credential writes automatically.
-  const retryDelaysMs = [1000, 2000];
+  // Render Free can return transient 502/503/504 while the UCOS instance wakes.
+  // Retry only explicitly opted-in idempotent reads, with a bounded total wait.
+  // Never automatically replay account creation or credential writes.
+  const retryDelaysMs = [1000, 2000, 4000, 6000];
   const attempts = retryTransient ? retryDelaysMs.length + 1 : 1;
   let lastError;
 
@@ -29,7 +30,7 @@ async function request(path, options = {}, retryTransient = false) {
       const response = await fetch(`${BASE}${path}`, {
         ...options,
         headers,
-        ...(retryTransient ? { signal: AbortSignal.timeout(7000) } : {}),
+        ...(retryTransient ? { signal: AbortSignal.timeout(8000) } : {}),
       });
       const raw = await response.text();
       let body = {};
@@ -84,8 +85,8 @@ export function warmUcosService() {
 
 export async function listPinterestAccounts() {
   // Do NOT await the long health warm-up here. The OAuth callback is behind a
-  // public reverse proxy; waiting for a full cold-start window can itself
-  // produce a 502 even if UCOS later becomes healthy. Use short bounded retries.
+  // public reverse proxy; do not wait on the full pre-warm loop inside the
+  // callback. The read itself has bounded retries for transient Render 502s.
   const result = await request("/accounts?platform=pinterest", {}, true);
   return Array.isArray(result?.data?.accounts) ? result.data.accounts : [];
 }
