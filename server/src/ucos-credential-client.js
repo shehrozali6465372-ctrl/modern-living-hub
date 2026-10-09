@@ -18,10 +18,14 @@ async function request(path, options = {}, retryTransient = false) {
     ...(options.headers || {}),
   };
 
-  // Render Free services can take about a minute to wake from idle. Five
-  // attempts with a 15-second total backoff ended before that window elapsed.
+  // Render Free services can take several minutes to recover from idle or a
+  // transient gateway 502. Retry only safe reads; never automatically replay
+  // credential writes.
   // Retry only safe reads; never automatically replay credential writes.
-  const retryDelaysMs = [2000, 4000, 8000, 12000, 15000, 15000, 15000];
+  // Render Free may return gateway 502s for longer than a single cold-start window.
+  // Account inventory is idempotent, so keep retrying transient gateway failures
+  // for a bounded recovery window instead of failing OAuth on the first wake-up.
+  const retryDelaysMs = [3000, 5000, 8000, 12000, 15000, 15000, 20000, 20000, 20000, 20000, 20000, 20000];
   const attempts = retryTransient ? retryDelaysMs.length + 1 : 1;
   let lastError;
 
@@ -62,7 +66,9 @@ export function warmUcosService() {
   warmupPromise = (async () => {
     // Render Free services can need about a minute to wake after idle.
     // Spread probes across a longer window, retrying only this safe GET.
-    const delays = [0, 5000, 10000, 15000, 15000, 20000, 20000];
+    // Probe across a longer cold-start window. /healthz is intentionally
+    // lightweight and does not depend on PostgreSQL being ready.
+    const delays = [0, 5000, 10000, 15000, 20000, 20000, 20000, 20000, 20000, 20000];
     let lastError;
     for (let attempt = 0; attempt < delays.length; attempt += 1) {
       if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
