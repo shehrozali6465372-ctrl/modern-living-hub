@@ -54,29 +54,37 @@ async function request(path, options = {}, retryTransient = false) {
   throw lastError || new Error("UCOS request failed");
 }
 
-async function warmUcosService() {
-  // Wake the Render Free service through its public, dependency-light health endpoint
-  // before calling the database-backed account registry.
-  const delays = [0, 3000, 6000, 10000, 15000, 15000];
-  let lastError;
-  for (let attempt = 0; attempt < delays.length; attempt += 1) {
-    if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
-    try {
-      const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(12000) });
-      if (response.ok) {
-        console.info("[pinterest] UCOS health preflight passed", { attempt: attempt + 1, status: response.status });
-        return;
+let warmupPromise = null;
+
+export function warmUcosService() {
+  // Share one wake-up loop across the OAuth-start route and the account lookup.
+  if (warmupPromise) return warmupPromise;
+  warmupPromise = (async () => {
+    // Render Free services can need about a minute to wake after idle.
+    // Spread probes across a longer window, retrying only this safe GET.
+    const delays = [0, 5000, 10000, 15000, 15000, 20000, 20000];
+    let lastError;
+    for (let attempt = 0; attempt < delays.length; attempt += 1) {
+      if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+      try {
+        const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(12000) });
+        if (response.ok) {
+          console.info("[pinterest] UCOS health preflight passed", { attempt: attempt + 1, status: response.status });
+          return true;
+        }
+        lastError = new Error(`UCOS health preflight HTTP ${response.status}`);
+      } catch (error) {
+        lastError = error;
       }
-      lastError = new Error(`UCOS health preflight HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
     }
-  }
-  // Do not mask a potentially recoverable account-read attempt if the public
-  // health probe is unavailable; the authenticated read has its own retry policy.
-  console.warn("[pinterest] UCOS health preflight did not pass; proceeding to account lookup", {
-    error: String(lastError?.message || lastError || "unknown"),
-  });
+    // Account lookup still has a separate retry policy, so a failed probe
+    // must not silently be treated as proof that credentials/authentication failed.
+    console.warn("[pinterest] UCOS health preflight did not pass; proceeding to account lookup", {
+      error: String(lastError?.message || lastError || "unknown"),
+    });
+    return false;
+  })().finally(() => { warmupPromise = null; });
+  return warmupPromise;
 }
 
 export async function listPinterestAccounts() {
