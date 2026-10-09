@@ -60,6 +60,35 @@ export async function listPinterestAccounts() {
   return Array.isArray(result?.data?.accounts) ? result.data.accounts : [];
 }
 
+export async function registerPinterestAccount(user) {
+  const userId = String(user?.id || "").trim();
+  if (!userId) throw new Error("Pinterest user ID is required to register the account");
+  const username = String(user?.username || "").trim();
+  const accountId = `pinterest:${userId}`;
+  const credentialRef = `pinterest:${userId}`;
+  return request("/accounts", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: accountId,
+      platform: "pinterest",
+      niche: "beauty",
+      display_name: username ? `Pinterest @${username}` : "Pinterest account",
+      credentials_ref: credentialRef,
+      capabilities: ["boards:read", "boards:write", "pins:read", "pins:write", "user_accounts:read"],
+      enabled: true,
+      tenant_id: "tenant:modern-living-hub",
+      workspace_id: "workspace:modern-living-hub:production",
+      brand_id: `brand:modern-living-hub:pinterest:${userId}`,
+      platform_account_id: userId,
+      external_account_id: userId,
+      tenant_name: "Modern Living Hub",
+      workspace_name: "Production",
+      brand_name: username ? `Pinterest ${username}` : "Pinterest Brand",
+      platform_account_name: username ? `Pinterest @${username}` : "Pinterest account",
+    }),
+  });
+}
+
 export async function storePinterestCredential(data) {
   return request("/credentials/pinterest", {
     method: "POST",
