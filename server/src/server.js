@@ -156,12 +156,40 @@ async function fetchPinterestUser(accessToken) {
   return data;
 }
 async function persistPinterestCredential(tokenData) {
+  // Tokens must be persisted by UCOS L13; never fall back to an MLH-local store.
+  console.info("[pinterest] access token exchanged; validating Pinterest identity");
   const user = await fetchPinterestUser(tokenData.access_token);
   const accounts = await listPinterestAccounts();
-  const account = accounts.find(a => String(a.platform_account_id || "") === String(user.id) || String(a.external_account_id || "") === String(user.id));
-  if (!account) throw new Error("Pinterest account is not registered in UCOS");
-  const expiresAt = tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : null;
-  await storePinterestCredential({
+  const configuredAccountId = String(process.env.UCOS_PINTEREST_ACCOUNT_ID || "").trim();
+  const account = configuredAccountId
+    ? accounts.find(a => String(a.account_id || "") === configuredAccountId)
+    : accounts.find(a =>
+        String(a.platform_account_id || "") === String(user.id) ||
+        String(a.external_account_id || "") === String(user.id)
+      );
+
+  if (!account) {
+    console.warn("[pinterest] no canonical UCOS account matched the authorized Pinterest identity");
+    throw new Error(configuredAccountId
+      ? "UCOS_PINTEREST_ACCOUNT_ID does not identify a registered Pinterest account"
+      : "Pinterest account is not registered in UCOS with its matching external account ID");
+  }
+  if (String(account.platform || "").toLowerCase() !== "pinterest" || account.enabled === false) {
+    throw new Error("Matched UCOS account is not an enabled Pinterest account");
+  }
+  if (String(account.platform_account_id || "") !== String(user.id) &&
+      String(account.external_account_id || "") !== String(user.id)) {
+    throw new Error("Configured UCOS account identity does not match the authorized Pinterest user");
+  }
+  if (!String(account.credentials_ref || "").trim()) {
+    throw new Error("Matched UCOS Pinterest account has no credential reference");
+  }
+
+  console.info("[pinterest] canonical UCOS account matched; writing credential to L13 vault");
+  const expiresAt = tokenData.expires_in
+    ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString()
+    : null;
+  const vaultResult = await storePinterestCredential({
     account_id: account.account_id,
     platform_account_id: account.platform_account_id,
     credential_ref: account.credentials_ref,
@@ -172,8 +200,15 @@ async function persistPinterestCredential(tokenData) {
     pinterest_user_id: user.id,
     username: user.username || "",
     expires_at: expiresAt,
-    refresh_token_expires_at: tokenData.refresh_token_expires_at ? new Date(Number(tokenData.refresh_token_expires_at) * 1000).toISOString() : null
+    refresh_token_expires_at: tokenData.refresh_token_expires_at
+      ? new Date(Number(tokenData.refresh_token_expires_at) * 1000).toISOString()
+      : null
   });
+  if (vaultResult?.data?.stored !== true) {
+    console.error("[pinterest] UCOS did not confirm credential persistence");
+    throw new Error("UCOS credential vault did not confirm storage");
+  }
+  console.info("[pinterest] credential successfully stored in UCOS L13 vault");
   return { account, user };
 }
 function createState() { return crypto.randomBytes(32).toString("hex"); }
@@ -211,7 +246,8 @@ app.get("/auth/pinterest/callback", async (req,res) => {
     const handoffCode=createHandoff(stored.account.account_id);
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1&handoff=${handoffCode}`);
   } catch(err) {
-    console.error("Pinterest OAuth callback failed:",err?.message||String(err));
+    // Log the failure stage and a sanitized message only; never log OAuth tokens.
+    console.error("[pinterest] OAuth callback failed:", err?.message || "unknown error");
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(err?.message||"Pinterest authentication failed.")}`);
   }
 });
