@@ -202,7 +202,9 @@ async function persistPinterestCredential(tokenData) {
     expires_at: expiresAt,
     refresh_token_expires_at: tokenData.refresh_token_expires_at
       ? new Date(Number(tokenData.refresh_token_expires_at) * 1000).toISOString()
-      : null
+      : tokenData.refresh_token_expires_in
+        ? new Date(Date.now() + Number(tokenData.refresh_token_expires_in) * 1000).toISOString()
+        : null
   });
   if (vaultResult?.data?.stored !== true) {
     console.error("[pinterest] UCOS did not confirm credential persistence");
