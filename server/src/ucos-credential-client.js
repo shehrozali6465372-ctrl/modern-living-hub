@@ -54,7 +54,33 @@ async function request(path, options = {}, retryTransient = false) {
   throw lastError || new Error("UCOS request failed");
 }
 
+async function warmUcosService() {
+  // Wake the Render Free service through its public, dependency-light health endpoint
+  // before calling the database-backed account registry.
+  const delays = [0, 3000, 6000, 10000, 15000, 15000];
+  let lastError;
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+    try {
+      const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(12000) });
+      if (response.ok) {
+        console.info("[pinterest] UCOS health preflight passed", { attempt: attempt + 1, status: response.status });
+        return;
+      }
+      lastError = new Error(`UCOS health preflight HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  // Do not mask a potentially recoverable account-read attempt if the public
+  // health probe is unavailable; the authenticated read has its own retry policy.
+  console.warn("[pinterest] UCOS health preflight did not pass; proceeding to account lookup", {
+    error: String(lastError?.message || lastError || "unknown"),
+  });
+}
+
 export async function listPinterestAccounts() {
+  await warmUcosService();
   // Retry only this idempotent read to cover Render cold-start and transient gateway failures.
   const result = await request("/accounts?platform=pinterest", {}, true);
   return Array.isArray(result?.data?.accounts) ? result.data.accounts : [];
