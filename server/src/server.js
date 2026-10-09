@@ -15,7 +15,7 @@ import cookieSession from "cookie-session";
 import crypto from "node:crypto";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
-import { listPinterestAccounts, registerPinterestAccount, storePinterestCredential, pinterestOperation, revokePinterestCredential } from "./ucos-credential-client.js";
+import { listPinterestAccounts, registerPinterestAccount, storePinterestCredential, pinterestOperation, revokePinterestCredential, warmUcosService } from "./ucos-credential-client.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 10000;
@@ -236,6 +236,9 @@ app.get("/api/health", (req, res) => {
 app.get("/auth/pinterest", (req,res) => {
   const state=createState(); if(!req.session.sessionId) req.session.sessionId=crypto.randomUUID(); req.session.oauth_state=state;
   res.cookie("mlh.oauth_state",state,{httpOnly:true,secure:isProduction,sameSite:isProduction?"none":"lax",maxAge:600000,signed:true});
+  // Start waking the UCOS Free service before the user spends time on Pinterest consent.
+  // Do not block the redirect: the warm-up continues in the background.
+  void warmUcosService().catch(err => console.warn("[pinterest] UCOS pre-warm failed", String(err?.message || err)));
   res.redirect(buildAuthUrl(state,req.query.prompt||null));
 });
 app.get("/auth/pinterest/callback", async (req,res) => {
