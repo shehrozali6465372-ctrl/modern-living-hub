@@ -10,25 +10,40 @@ function requireConfig() {
   if (!TOKEN) throw new Error("UCOS_API_TOKEN is not configured");
 }
 
-async function request(path, options = {}) {
+async function request(path, options = {}, retryTransient = false) {
   requireConfig();
   const headers = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${TOKEN}`,
     ...(options.headers || {}),
   };
-  const response = await fetch(`${BASE}${path}`, { ...options, headers });
-  const raw = await response.text();
-  let body = {};
-  try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
-  if (!response.ok) {
-    throw new Error(String(body.error || body.message || `UCOS HTTP ${response.status}`));
+  const attempts = retryTransient ? 3 : 1;
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${BASE}${path}`, { ...options, headers });
+      const raw = await response.text();
+      let body = {};
+      try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
+      if (response.ok) return body;
+      const error = new Error(String(body.error || body.message || `UCOS HTTP ${response.status}`));
+      if (![502, 503, 504].includes(response.status) || attempt === attempts) throw error;
+      lastError = error;
+    } catch (error) {
+      if (attempt === attempts || !retryTransient || !/fetch failed|network|ECONNRESET|ETIMEDOUT|UCOS HTTP 502|UCOS HTTP 503|UCOS HTTP 504/i.test(String(error?.message || error))) {
+        throw error;
+      }
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 400 * attempt));
   }
-  return body;
+  throw lastError || new Error("UCOS request failed");
 }
 
 export async function listPinterestAccounts() {
-  const result = await request("/accounts?platform=pinterest");
+  // Render can briefly return a gateway 502 while the free service wakes/restarts.
+  // Retry this read only; do not automatically replay credential-write POSTs.
+  const result = await request("/accounts?platform=pinterest", {}, true);
   return Array.isArray(result?.data?.accounts) ? result.data.accounts : [];
 }
 
