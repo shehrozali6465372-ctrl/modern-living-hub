@@ -15,7 +15,7 @@ import cookieSession from "cookie-session";
 import crypto from "node:crypto";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
-import { listPinterestAccounts, storePinterestCredential, pinterestOperation, revokePinterestCredential } from "./ucos-credential-client.js";
+import { listPinterestAccounts, registerPinterestAccount, storePinterestCredential, pinterestOperation, revokePinterestCredential } from "./ucos-credential-client.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 10000;
@@ -161,7 +161,7 @@ async function persistPinterestCredential(tokenData) {
   const user = await fetchPinterestUser(tokenData.access_token);
   const accounts = await listPinterestAccounts();
   const configuredAccountId = String(process.env.UCOS_PINTEREST_ACCOUNT_ID || "").trim();
-  const account = configuredAccountId
+  let account = configuredAccountId
     ? accounts.find(a => String(a.account_id || "") === configuredAccountId)
     : accounts.find(a =>
         String(a.platform_account_id || "") === String(user.id) ||
@@ -169,10 +169,19 @@ async function persistPinterestCredential(tokenData) {
       );
 
   if (!account) {
-    console.warn("[pinterest] no canonical UCOS account matched; identity metadata for registration", JSON.stringify({ pinterest_user_id: String(user.id || ""), username: String(user.username || "") }));
-    throw new Error(configuredAccountId
-      ? "UCOS_PINTEREST_ACCOUNT_ID does not identify a registered Pinterest account"
-      : "Pinterest account is not registered in UCOS with its matching external account ID");
+    if (configuredAccountId) {
+      throw new Error("UCOS_PINTEREST_ACCOUNT_ID does not identify a registered Pinterest account");
+    }
+    console.info("[pinterest] no matching account; provisioning canonical UCOS account", JSON.stringify({ pinterest_user_id: String(user.id || ""), username: String(user.username || "") }));
+    await registerPinterestAccount(user);
+    const refreshedAccounts = await listPinterestAccounts();
+    account = refreshedAccounts.find(a =>
+      String(a.platform_account_id || "") === String(user.id) ||
+      String(a.external_account_id || "") === String(user.id)
+    );
+    if (!account) {
+      throw new Error("UCOS account registration returned but the canonical Pinterest account was not visible on read-back");
+    }
   }
   if (String(account.platform || "").toLowerCase() !== "pinterest" || account.enabled === false) {
     throw new Error("Matched UCOS account is not an enabled Pinterest account");
