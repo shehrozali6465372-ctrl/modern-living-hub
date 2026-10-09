@@ -169,7 +169,7 @@ async function persistPinterestCredential(tokenData) {
       );
 
   if (!account) {
-    console.warn("[pinterest] no canonical UCOS account matched the authorized Pinterest identity");
+    console.warn("[pinterest] no canonical UCOS account matched; identity metadata for registration", JSON.stringify({ pinterest_user_id: String(user.id || ""), username: String(user.username || ""), display_name: String(user.profile_image || "") ? "" : "" }));
     throw new Error(configuredAccountId
       ? "UCOS_PINTEREST_ACCOUNT_ID does not identify a registered Pinterest account"
       : "Pinterest account is not registered in UCOS with its matching external account ID");
