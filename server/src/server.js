@@ -262,10 +262,8 @@ app.post("/api/pinterest/complete",async(req,res)=>{
   try{await pinterestOperation(entry.accountId,"account");res.json({connected:true,session_token:createSessionToken(entry.accountId)});}
   catch{res.status(400).json({error:"Pinterest credentials are not available in UCOS. Please reconnect."});}
 });
-app.get("/api/pinterest/accounts",async(req,res)=>{
-  try{const accounts=await listPinterestAccounts();res.json({accounts:accounts.map(a=>({account_id:a.account_id,platform_account_id:a.platform_account_id,external_account_id:a.external_account_id,display_name:a.display_name,niche:a.niche,credential_ref:a.credentials_ref}))});}
-  catch(err){console.error("Pinterest account registry error:",err?.message||String(err));res.status(500).json({error:"Could not load Pinterest accounts."});}
-});
+// Canonical account inventory is intentionally not exposed through an unauthenticated MLH endpoint.
+// The OAuth callback uses the server-to-server UCOS credential client directly.
 app.post("/api/pinterest/disconnect",async(req,res)=>{
   const accountId=getAccountId(req);
   if(accountId){try{const accounts=await listPinterestAccounts();const account=accounts.find(a=>a.account_id===accountId);if(account?.credentials_ref)await revokePinterestCredential(accountId,account.credentials_ref);}catch(err){console.error("Pinterest credential revoke failed:",err?.message||String(err));}
