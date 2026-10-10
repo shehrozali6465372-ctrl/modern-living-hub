@@ -60,20 +60,24 @@ export function warmUcosService() {
   // Start warming from the OAuth-start route, in the background only.
   if (warmupPromise) return warmupPromise;
   warmupPromise = (async () => {
-    // Keep this preflight bounded so the OAuth-start HTTP request does not hang indefinitely.
-    const delays = [0, 2000, 4000, 6000, 8000];
+    // Render Free instances can need a full cold-start window. The previous ~20s
+    // probe window expired while UCOS was still returning proxy HTTP 502 responses.
+    // Keep this under the platform's typical request timeout while allowing ~80s to wake.
+    const delays = [0, 5000, 10000, 15000, 20000];
     let lastError;
     for (let attempt = 0; attempt < delays.length; attempt += 1) {
       if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
       try {
-        const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(4000) });
+        const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(10000) });
         if (response.ok) {
           console.info("[pinterest] UCOS health preflight passed", { attempt: attempt + 1, status: response.status });
           return true;
         }
         lastError = new Error(`UCOS health preflight HTTP ${response.status}`);
+        console.warn("[pinterest] UCOS health preflight retry", { attempt: attempt + 1, status: response.status });
       } catch (error) {
         lastError = error;
+        console.warn("[pinterest] UCOS health preflight retry", { attempt: attempt + 1, error: String(error?.message || error) });
       }
     }
     console.warn("[pinterest] UCOS health preflight did not pass", {
