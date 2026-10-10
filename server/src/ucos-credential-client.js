@@ -30,7 +30,7 @@ async function request(path, options = {}, retryTransient = false) {
       const response = await fetch(`${BASE}${path}`, {
         ...options,
         headers,
-        ...(retryTransient ? { signal: AbortSignal.timeout(8000) } : {}),
+        ...(retryTransient ? { signal: AbortSignal.timeout(5000) } : {}),
       });
       const raw = await response.text();
       let body = {};
@@ -60,12 +60,13 @@ export function warmUcosService() {
   // Start warming from the OAuth-start route, in the background only.
   if (warmupPromise) return warmupPromise;
   warmupPromise = (async () => {
-    const delays = [0, 5000, 10000, 15000, 20000, 20000];
+    // Keep this preflight bounded so the OAuth-start HTTP request does not hang indefinitely.
+    const delays = [0, 2000, 4000, 6000, 8000];
     let lastError;
     for (let attempt = 0; attempt < delays.length; attempt += 1) {
       if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
       try {
-        const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(8000) });
+        const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(4000) });
         if (response.ok) {
           console.info("[pinterest] UCOS health preflight passed", { attempt: attempt + 1, status: response.status });
           return true;
