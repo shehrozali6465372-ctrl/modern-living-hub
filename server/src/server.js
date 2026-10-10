@@ -222,6 +222,26 @@ async function persistPinterestCredential(tokenData) {
   console.info("[pinterest] credential successfully stored in UCOS L13 vault");
   return { account, user };
 }
+// Once Pinterest issues a token, never re-exchange the same authorization code.
+ // Retry only the UCOS persistence phase on transient gateway/network failures.
+async function persistPinterestCredentialWithRetry(tokenData) {
+  const delays = [0, 1500];
+  let lastError;
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+    try {
+      return await persistPinterestCredential(tokenData);
+    } catch (err) {
+      lastError = err;
+      const message = String(err?.message || err);
+      const transient = /UCOS HTTP (?:502|503|504)|fetch failed|ECONNRESET|ETIMEDOUT|timeout|aborted|AbortError|TimeoutError/i.test(message);
+      if (!transient || attempt === delays.length - 1) throw err;
+      console.warn("[pinterest] transient UCOS failure after token exchange; retrying persistence with the existing token response");
+    }
+  }
+  throw lastError || new Error("Pinterest credential persistence failed");
+}
+
 function createState() { return crypto.randomBytes(32).toString("hex"); }
 function buildAuthUrl(state, prompt) {
   const params = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: "code", scope: SCOPES, state });
@@ -233,12 +253,22 @@ function buildAuthUrl(state, prompt) {
 app.get("/api/health", (req, res) => {
   res.json({ status:"ok", service:"modern-living-hub-backend", pinterest_client_id_configured:Boolean(CLIENT_ID), redirect_uri_configured:Boolean(REDIRECT_URI), frontend_url_configured:Boolean(FRONTEND_URL), ucos_vault_configured:Boolean(process.env.UCOS_API_TOKEN), production_mode:isProduction, sandbox_mode:isSandbox });
 });
-app.get("/auth/pinterest", (req,res) => {
+app.get("/auth/pinterest", async (req,res) => {
+  // Do not send the user to Pinterest until the UCOS credential service is awake.
+  // Otherwise Pinterest's one-time code can be consumed even though UCOS returns 502,
+  // and refreshing/reusing that callback will then produce invalid_grant.
+  try {
+    const ready = await warmUcosService();
+    if (!ready) {
+      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("UCOS is waking up or temporarily unavailable. No Pinterest authorization code was exchanged. Wait 30–60 seconds and click Connect Pinterest again.")}`);
+    }
+  } catch (err) {
+    console.warn("[pinterest] UCOS preflight failed before OAuth start", String(err?.message || err));
+    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("UCOS is temporarily unavailable. No Pinterest authorization code was exchanged. Please try Connect Pinterest again shortly.")}`);
+  }
+
   const state=createState(); if(!req.session.sessionId) req.session.sessionId=crypto.randomUUID(); req.session.oauth_state=state;
   res.cookie("mlh.oauth_state",state,{httpOnly:true,secure:isProduction,sameSite:isProduction?"none":"lax",maxAge:600000,signed:true});
-  // Start waking the UCOS Free service before the user spends time on Pinterest consent.
-  // Do not block the redirect: the warm-up continues in the background.
-  void warmUcosService().catch(err => console.warn("[pinterest] UCOS pre-warm failed", String(err?.message || err)));
   res.redirect(buildAuthUrl(state,req.query.prompt||null));
 });
 app.get("/auth/pinterest/callback", async (req,res) => {
@@ -249,6 +279,21 @@ app.get("/auth/pinterest/callback", async (req,res) => {
   const sessionState=req.session.oauth_state||null;
   if(!((sessionState&&state===sessionState)||(cookieState&&state===cookieState))){res.clearCookie("mlh.oauth_state");return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Invalid OAuth state. Please try again.`);}
   delete req.session.oauth_state; res.clearCookie("mlh.oauth_state");
+
+  // Recheck the real UCOS account endpoint immediately before consuming Pinterest's
+  // one-time authorization code. Health alone can be green while the account API is not.
+  try {
+    await listPinterestAccounts();
+  } catch (err) {
+    const message = String(err?.message || err);
+    const missingMachineToken = /UCOS_API_TOKEN is not configured/i.test(message);
+    console.warn("[pinterest] UCOS account preflight failed; Pinterest code left unexchanged", message);
+    const userMessage = missingMachineToken
+      ? "UCOS_API_TOKEN is missing from the Modern Living Hub backend configuration. Pinterest authorization was not completed."
+      : "UCOS is temporarily unavailable. Pinterest authorization code was not exchanged. Return to this page and start a fresh Connect Pinterest flow when UCOS is available.";
+    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(userMessage)}`);
+  }
+
   try {
     const basic=Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
     const body=new URLSearchParams({grant_type:"authorization_code",code:code.toString(),redirect_uri:REDIRECT_URI});
@@ -267,7 +312,7 @@ app.get("/auth/pinterest/callback", async (req,res) => {
           : tokenData.error_description || safeError || `HTTP ${tokenRes.status}`;
       return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Could not exchange authorization code: "+detail)}`);
     }
-    const stored=await persistPinterestCredential(tokenData);
+    const stored=await persistPinterestCredentialWithRetry(tokenData);
     req.session.pinterestAccountId=stored.account.account_id;
     const handoffCode=createHandoff(stored.account.account_id);
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_connected=1&handoff=${handoffCode}`);
