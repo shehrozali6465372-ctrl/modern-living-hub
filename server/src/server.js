@@ -310,7 +310,7 @@ app.get("/auth/pinterest/callback", async (req,res) => {
 
   try {
     const basic=Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
-    const body=new URLSearchParams({grant_type:"authorization_code",code:code.toString(),redirect_uri:REDIRECT_URI});
+    const body=new URLSearchParams({grant_type:"authorization_code",code:code.toString(),redirect_uri:REDIRECT_URI,continuous_refresh:"true"});
     const tokenRes=await fetch(PINTEREST_TOKEN_URL,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded",Authorization:`Basic ${basic}`},body:body.toString()});
     const tokenData=await tokenRes.json().catch(()=>({}));
     if(!tokenRes.ok||!tokenData.access_token){
