@@ -125,7 +125,9 @@ a **one-time handoff code + bearer session token** architecture:
 ## Security
 
 - `PINTEREST_CLIENT_SECRET` is never sent to the frontend.
-- Access tokens are stored server-side in an ephemeral tokenStore (in-memory Map).
+- Pinterest access/refresh tokens are stored only in UCOS L13 encrypted PostgreSQL; Modern Living Hub keeps only short-lived OAuth handoff/session identifiers in memory.
+- OAuth requests `continuous_refresh=true` for compatibility with older Pinterest apps. UCOS refreshes access tokens shortly before expiry and persists any rotated refresh token back into the encrypted vault.
+- The Modern Living Hub backend passes its Pinterest app ID/secret to the authenticated UCOS service server-to-server for refresh only; neither value nor Pinterest tokens are returned to browser clients or logged.
 - OAuth uses a **one-time handoff code** — tokens never appear in URLs or frontend responses.
 - Bearer session tokens are opaque random hex strings, never Pinterest tokens.
 - Pinterest access_token and refresh_token are NEVER exposed to the frontend JavaScript.

@@ -133,9 +133,18 @@ export async function storePinterestCredential(data) {
 }
 
 export async function pinterestOperation(accountId, operation, payload = {}) {
+  // UCOS owns the encrypted OAuth tokens; MLH supplies the Pinterest app
+  // credentials server-to-server only so UCOS can refresh expiring tokens.
+  // These values are never returned to the browser or included in logs.
   return request("/pinterest/operations", {
     method: "POST",
-    body: JSON.stringify({ account_id: accountId, operation, payload }),
+    body: JSON.stringify({
+      account_id: accountId,
+      operation,
+      payload,
+      pinterest_client_id: String(process.env.PINTEREST_CLIENT_ID || ""),
+      pinterest_client_secret: String(process.env.PINTEREST_CLIENT_SECRET || ""),
+    }),
   });
 }
 
