@@ -254,17 +254,31 @@ app.get("/api/health", (req, res) => {
   res.json({ status:"ok", service:"modern-living-hub-backend", pinterest_client_id_configured:Boolean(CLIENT_ID), redirect_uri_configured:Boolean(REDIRECT_URI), frontend_url_configured:Boolean(FRONTEND_URL), ucos_vault_configured:Boolean(process.env.UCOS_API_TOKEN), production_mode:isProduction, sandbox_mode:isSandbox });
 });
 app.get("/auth/pinterest", async (req,res) => {
-  // Do not send the user to Pinterest until the UCOS credential service is awake.
-  // Otherwise Pinterest's one-time code can be consumed even though UCOS returns 502,
-  // and refreshing/reusing that callback will then produce invalid_grant.
+  // Do not send the user to Pinterest until both UCOS health and the authenticated
+  // account API are reachable. Health alone does not prove UCOS_API_TOKEN is valid.
+  // This prevents a predictable callback failure after the user has granted consent.
   try {
     const ready = await warmUcosService();
     if (!ready) {
       return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("UCOS is waking up or temporarily unavailable. No Pinterest authorization code was exchanged. Wait 30–60 seconds and click Connect Pinterest again.")}`);
     }
+
+    // A safe, read-only machine-auth check; never log or expose account/token data.
+    await listPinterestAccounts();
+    console.info("[pinterest] UCOS account API preflight passed before OAuth start");
   } catch (err) {
-    console.warn("[pinterest] UCOS preflight failed before OAuth start", String(err?.message || err));
-    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("UCOS is temporarily unavailable. No Pinterest authorization code was exchanged. Please try Connect Pinterest again shortly.")}`);
+    const message = String(err?.message || err);
+    const missingMachineToken = /UCOS_API_TOKEN is not configured/i.test(message);
+    const rejectedMachineToken = /UCOS HTTP (?:401|403)/i.test(message);
+    console.warn("[pinterest] UCOS preflight failed before OAuth start", {
+      cause: missingMachineToken ? "machine_token_missing" : rejectedMachineToken ? "machine_token_rejected" : "dependency_unavailable"
+    });
+    const userMessage = missingMachineToken
+      ? "UCOS_API_TOKEN is missing from the Modern Living Hub backend configuration. Pinterest authorization was not started."
+      : rejectedMachineToken
+        ? "UCOS rejected the Modern Living Hub machine credential. Verify UCOS_API_TOKEN in Render before connecting Pinterest."
+        : "UCOS account API is temporarily unavailable. Pinterest authorization was not started, so no one-time authorization code was consumed. Please retry shortly.";
+    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(userMessage)}`);
   }
 
   const state=createState(); if(!req.session.sessionId) req.session.sessionId=crypto.randomUUID(); req.session.oauth_state=state;
