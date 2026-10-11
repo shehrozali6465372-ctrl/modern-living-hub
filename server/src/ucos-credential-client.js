@@ -55,21 +55,25 @@ async function request(path, options = {}, retryTransient = false) {
 }
 
 let warmupPromise = null;
+let warmupSucceededAt = 0;
 
 export function warmUcosService() {
-  // Start warming from the OAuth-start route, in the background only.
+  // Reuse a recent successful probe within this process to avoid duplicating
+  // long cold-start waits between OAuth-start and callback requests.
+  if (Date.now() - warmupSucceededAt < 45000) return Promise.resolve(true);
   if (warmupPromise) return warmupPromise;
   warmupPromise = (async () => {
-    // Render Free instances can need a full cold-start window. The previous ~20s
-    // probe window expired while UCOS was still returning proxy HTTP 502 responses.
-    // Keep this under the platform's typical request timeout while allowing ~80s to wake.
-    const delays = [0, 5000, 10000, 15000, 20000];
+    // Render Free may take about a minute to wake. Use bounded probes long enough
+    // to cover that window, and re-run this check in the OAuth callback because
+    // the user may spend several minutes on Pinterest's consent screen.
+    const delays = [0, 5000, 10000, 15000, 20000, 25000];
     let lastError;
     for (let attempt = 0; attempt < delays.length; attempt += 1) {
       if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
       try {
         const response = await fetch(`${BASE}/healthz`, { signal: AbortSignal.timeout(10000) });
         if (response.ok) {
+          warmupSucceededAt = Date.now();
           console.info("[pinterest] UCOS health preflight passed", { attempt: attempt + 1, status: response.status });
           return true;
         }
@@ -89,9 +93,10 @@ export function warmUcosService() {
 }
 
 export async function listPinterestAccounts() {
-  // Do NOT await the long health warm-up here. The OAuth callback is behind a
-  // public reverse proxy; do not wait on the full pre-warm loop inside the
-  // callback. The read itself has bounded retries for transient Render 502s.
+  // Re-check readiness on callback: Pinterest consent can take long enough for
+  // the UCOS Free instance to spin down after the OAuth-start preflight.
+  const ready = await warmUcosService();
+  if (!ready) throw new Error("UCOS is still waking up; retry Pinterest Connect without reusing the previous authorization URL.");
   const result = await request("/accounts?platform=pinterest", {}, true);
   return Array.isArray(result?.data?.accounts) ? result.data.accounts : [];
 }
