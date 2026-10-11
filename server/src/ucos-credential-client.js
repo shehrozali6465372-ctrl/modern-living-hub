@@ -21,7 +21,12 @@ async function request(path, options = {}, retryTransient = false) {
   // Render Free can return transient 502/503/504 while the UCOS instance wakes.
   // Retry only explicitly opted-in idempotent reads, with a bounded total wait.
   // Never automatically replay account creation or credential writes.
-  const retryDelaysMs = [1000, 2000, 4000, 6000];
+  // The idempotent account preflight can include a cold PostgreSQL connection.
+  // Five seconds was too short: it cancelled a valid first read and left a
+  // BrokenPipeError in UCOS while it was writing the response. Use fewer,
+  // longer attempts so a cold DB read can finish without extending this route
+  // into an unbounded retry loop.
+  const retryDelaysMs = [1000, 2000, 4000];
   const attempts = retryTransient ? retryDelaysMs.length + 1 : 1;
   let lastError;
 
@@ -30,7 +35,7 @@ async function request(path, options = {}, retryTransient = false) {
       const response = await fetch(`${BASE}${path}`, {
         ...options,
         headers,
-        ...(retryTransient ? { signal: AbortSignal.timeout(5000) } : {}),
+        ...(retryTransient ? { signal: AbortSignal.timeout(15000) } : {}),
       });
       const raw = await response.text();
       let body = {};
@@ -40,11 +45,17 @@ async function request(path, options = {}, retryTransient = false) {
       const error = new Error(String(body.error || body.message || `UCOS HTTP ${response.status}`));
       if (![502, 503, 504].includes(response.status) || attempt === attempts) throw error;
       lastError = error;
+      console.warn("[pinterest] transient UCOS account-read response; retrying", {
+        attempt, status: response.status,
+      });
     } catch (error) {
       const message = String(error?.message || error);
       const transient = /fetch failed|network|ECONNRESET|ETIMEDOUT|timeout|aborted|AbortError|TimeoutError|UCOS HTTP 502|UCOS HTTP 503|UCOS HTTP 504/i.test(message);
       if (attempt === attempts || !retryTransient || !transient) throw error;
       lastError = error;
+      console.warn("[pinterest] transient UCOS account-read transport failure; retrying", {
+        attempt, error: message.slice(0, 120),
+      });
     }
 
     if (attempt < attempts) {
