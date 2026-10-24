@@ -15,7 +15,7 @@ import cookieSession from "cookie-session";
 import crypto from "node:crypto";
 import cookieParser from "cookie-parser";
 import "dotenv/config";
-import { listPinterestAccounts, registerPinterestAccount, storePinterestCredential, pinterestOperation, revokePinterestCredential, warmUcosService } from "./ucos-credential-client.js";
+
 
 const app = express();
 const PORT = Number(process.env.PORT) || 10000;
@@ -86,7 +86,7 @@ app.use(
     sameSite: isProduction ? "none" : "lax"
   })
 );
-// Security: the signed HttpOnly cookie contains only non-secret session identifiers.\n// Raw Pinterest access/refresh tokens are stored only in UCOS L13 encrypted PostgreSQL.\n\n// ─── CORS ───
+// Security: the signed HttpOnly cookie contains only non-secret session identifiers.\n// Raw Pinterest access/refresh tokens are stored only in Pinterest Agent Neon database.\n\n// ─── CORS ───
 // Only allow the actual frontend origin.
 // Production: https://modernlivinghub.vercel.app
 // Development: localhost origins
@@ -116,7 +116,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ─── UCOS-backed Pinterest credential boundary ───
+// ─── Pinterest Agent-backed credential boundary ───
 const handoffStore = new Map();
 const HANDOFF_TTL_MS = 5 * 60 * 1000;
 const sessionTokenStore = new Map();
@@ -155,129 +155,41 @@ async function fetchPinterestUser(accessToken) {
   if (!response.ok || !data.id) throw new Error("Pinterest user account lookup failed");
   return data;
 }
-async function persistPinterestCredential(tokenData) {
-  // Tokens must be persisted by UCOS L13; never fall back to an MLH-local store.
-  console.info("[pinterest] access token exchanged; validating Pinterest identity");
-  const user = await fetchPinterestUser(tokenData.access_token);
-  const accounts = await listPinterestAccounts();
-  const configuredAccountId = String(process.env.UCOS_PINTEREST_ACCOUNT_ID || "").trim();
-  let account = configuredAccountId
-    ? accounts.find(a => String(a.account_id || "") === configuredAccountId)
-    : accounts.find(a =>
-        String(a.platform_account_id || "") === String(user.id) ||
-        String(a.external_account_id || "") === String(user.id)
-      );
-
-  if (!account) {
-    if (configuredAccountId) {
-      throw new Error("UCOS_PINTEREST_ACCOUNT_ID does not identify a registered Pinterest account");
-    }
-    console.info("[pinterest] no matching account; provisioning canonical UCOS account", JSON.stringify({ pinterest_user_id: String(user.id || ""), username: String(user.username || "") }));
-    await registerPinterestAccount(user);
-    const refreshedAccounts = await listPinterestAccounts();
-    account = refreshedAccounts.find(a =>
-      String(a.platform_account_id || "") === String(user.id) ||
-      String(a.external_account_id || "") === String(user.id)
-    );
-    if (!account) {
-      throw new Error("UCOS account registration returned but the canonical Pinterest account was not visible on read-back");
-    }
-  }
-  if (String(account.platform || "").toLowerCase() !== "pinterest" || account.enabled === false) {
-    throw new Error("Matched UCOS account is not an enabled Pinterest account");
-  }
-  if (String(account.platform_account_id || "") !== String(user.id) &&
-      String(account.external_account_id || "") !== String(user.id)) {
-    throw new Error("Configured UCOS account identity does not match the authorized Pinterest user");
-  }
-  if (!String(account.credentials_ref || "").trim()) {
-    throw new Error("Matched UCOS Pinterest account has no credential reference");
-  }
-
-  console.info("[pinterest] canonical UCOS account matched; writing credential to L13 vault");
-  const expiresAt = tokenData.expires_in
-    ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString()
-    : null;
-  const vaultResult = await storePinterestCredential({
-    account_id: account.account_id,
-    platform_account_id: account.platform_account_id,
-    credential_ref: account.credentials_ref,
-    access_token: tokenData.access_token,
-    refresh_token: tokenData.refresh_token || "",
-    token_type: tokenData.token_type || "bearer",
-    scope: tokenData.scope || SCOPES,
-    pinterest_user_id: user.id,
-    username: user.username || "",
-    expires_at: expiresAt,
-    refresh_token_expires_at: tokenData.refresh_token_expires_at
-      ? new Date(Number(tokenData.refresh_token_expires_at) * 1000).toISOString()
-      : tokenData.refresh_token_expires_in
-        ? new Date(Date.now() + Number(tokenData.refresh_token_expires_in) * 1000).toISOString()
-        : null
-  });
-  if (vaultResult?.data?.stored !== true) {
-    console.error("[pinterest] UCOS did not confirm credential persistence");
-    throw new Error("UCOS credential vault did not confirm storage");
-  }
-  console.info("[pinterest] credential successfully stored in UCOS L13 vault");
-
-  // Mirror the authorized account credential into the Pinterest Agent's Neon vault.
-  // This is server-to-server only; the Agent encrypts token material at rest.
-  const agentBase = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\\/+$/, "");
-  const agentKey = String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim();
-  if (!agentBase || !agentKey) {
-    throw new Error("Pinterest Agent credential storage is not configured. Set PINTEREST_AGENT_API_URL and PINTEREST_AGENT_INGEST_KEY in Modern Living Hub backend.");
-  }
-  const agentResponse = await fetch(`${agentBase}/integrations/pinterest/credentials`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Credential-Ingest-Key": agentKey
-    },
-    body: JSON.stringify({
-      account_id: String(account.account_id),
-      pinterest_user_id: String(user.id),
-      username: String(user.username || ""),
-      access_token: String(tokenData.access_token),
-      refresh_token: String(tokenData.refresh_token || ""),
-      token_type: String(tokenData.token_type || "bearer"),
-      scope: String(tokenData.scope || SCOPES),
-      expires_at: expiresAt,
-      refresh_token_expires_at: tokenData.refresh_token_expires_at
-        ? new Date(Number(tokenData.refresh_token_expires_at) * 1000).toISOString()
-        : tokenData.refresh_token_expires_in
-          ? new Date(Date.now() + Number(tokenData.refresh_token_expires_in) * 1000).toISOString()
-          : null
-    }),
-    signal: AbortSignal.timeout(15000)
-  });
-  const agentResult = await agentResponse.json().catch(() => ({}));
-  if (!agentResponse.ok || agentResult?.stored !== true) {
-    console.error("[pinterest] Agent Neon credential persistence not confirmed", { status: agentResponse.status });
-    throw new Error("Pinterest Agent did not confirm encrypted credential storage in Neon. Check Agent service configuration before reconnecting.");
-  }
-  console.info("[pinterest] encrypted credential stored in Pinterest Agent Neon vault");
-  return { account, user };
-}
-// Once Pinterest issues a token, never re-exchange the same authorization code.
- // Retry only the UCOS persistence phase on transient gateway/network failures.
-async function persistPinterestCredentialWithRetry(tokenData) {
-  const delays = [0, 1500];
+async function agentRequest(path, options = {}) {
+  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\/+$/, "");
+  const key = String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim();
+  if (!base || !key) throw new Error("Pinterest Agent API is not configured.");
   let lastError;
-  for (let attempt = 0; attempt < delays.length; attempt += 1) {
-    if (delays[attempt]) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+  for (const delay of [0, 5000, 10000, 15000, 20000, 25000]) {
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
     try {
-      return await persistPinterestCredential(tokenData);
+      const response = await fetch(`${base}${path}`, { ...options, headers: { "Content-Type": "application/json", "X-Credential-Ingest-Key": key, ...(options.headers || {}) }, signal: AbortSignal.timeout(15000) });
+      const body = await response.json().catch(() => ({}));
+      if (response.ok) return body;
+      const err = new Error(String(body.detail || body.error || `Agent API HTTP ${response.status}`));
+      if (![502,503,504].includes(response.status)) throw err;
+      lastError = err;
     } catch (err) {
       lastError = err;
-      const message = String(err?.message || err);
-      const transient = /UCOS HTTP (?:502|503|504)|fetch failed|ECONNRESET|ETIMEDOUT|timeout|aborted|AbortError|TimeoutError/i.test(message);
-      if (!transient || attempt === delays.length - 1) throw err;
-      console.warn("[pinterest] transient UCOS failure after token exchange; retrying persistence with the existing token response");
+      if (!/fetch failed|ECONNRESET|ETIMEDOUT|timeout|aborted|AbortError|TimeoutError|HTTP 502|HTTP 503|HTTP 504/i.test(String(err?.message || err))) throw err;
     }
   }
-  throw lastError || new Error("Pinterest credential persistence failed");
+  throw lastError || new Error("Pinterest Agent is still starting. Please retry.");
 }
+async function persistPinterestCredential(tokenData) {
+  const user = await fetchPinterestUser(tokenData.access_token);
+  const expiresAt = tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : null;
+  const accountId = `pinterest:${String(user.id)}`;
+  const saved = await agentRequest("/integrations/pinterest/credentials", { method:"POST", body:JSON.stringify({
+    account_id:accountId, pinterest_user_id:String(user.id), username:String(user.username || ""),
+    access_token:String(tokenData.access_token), refresh_token:String(tokenData.refresh_token || ""),
+    token_type:String(tokenData.token_type || "bearer"), scope:String(tokenData.scope || SCOPES), expires_at:expiresAt,
+    refresh_token_expires_at:tokenData.refresh_token_expires_at ? new Date(Number(tokenData.refresh_token_expires_at)*1000).toISOString() : tokenData.refresh_token_expires_in ? new Date(Date.now()+Number(tokenData.refresh_token_expires_in)*1000).toISOString() : null
+  })});
+  if (saved?.stored !== true) throw new Error("Pinterest Agent did not confirm encrypted Neon credential storage.");
+  return { account:{account_id:accountId}, user };
+}
+async function persistPinterestCredentialWithRetry(tokenData) { return persistPinterestCredential(tokenData); }
 
 function createState() { return crypto.randomBytes(32).toString("hex"); }
 function buildAuthUrl(state, prompt) {
@@ -287,42 +199,10 @@ function buildAuthUrl(state, prompt) {
 }
 
 // ─── Routes ───
-app.get("/api/health", (req, res) => {
-  res.json({ status:"ok", service:"modern-living-hub-backend", pinterest_client_id_configured:Boolean(CLIENT_ID), redirect_uri_configured:Boolean(REDIRECT_URI), frontend_url_configured:Boolean(FRONTEND_URL), ucos_vault_configured:Boolean(process.env.UCOS_API_TOKEN), production_mode:isProduction, sandbox_mode:isSandbox });
-});
+app.get("/api/health", (req,res) => res.json({status:"ok",service:"modern-living-hub-backend",agent_configured:Boolean(process.env.PINTEREST_AGENT_API_URL&&process.env.PINTEREST_AGENT_INGEST_KEY),pinterest_client_id_configured:Boolean(CLIENT_ID),redirect_uri_configured:Boolean(REDIRECT_URI)}));
 app.get("/auth/pinterest", async (req,res) => {
-  if (!String(process.env.PINTEREST_AGENT_API_URL || "").trim() ||
-      !String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim()) {
-    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Pinterest Agent Neon credential storage is not configured in the Modern Living Hub backend. No Pinterest authorization was started.")}`);
-  }
-  // Do not send the user to Pinterest until both UCOS health and the authenticated
-  // account API are reachable. Health alone does not prove UCOS_API_TOKEN is valid.
-  // This prevents a predictable callback failure after the user has granted consent.
-  try {
-    const ready = await warmUcosService();
-    if (!ready) {
-      return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("UCOS is waking up or temporarily unavailable. No Pinterest authorization code was exchanged. Wait 30–60 seconds and click Connect Pinterest again.")}`);
-    }
-
-    // A safe, read-only machine-auth check; never log or expose account/token data.
-    await listPinterestAccounts();
-    console.info("[pinterest] UCOS account API preflight passed before OAuth start");
-  } catch (err) {
-    const message = String(err?.message || err);
-    const missingMachineToken = /UCOS_API_TOKEN is not configured/i.test(message);
-    const rejectedMachineToken = /UCOS HTTP (?:401|403)/i.test(message);
-    console.warn("[pinterest] UCOS preflight failed before OAuth start", {
-      cause: missingMachineToken ? "machine_token_missing" : rejectedMachineToken ? "machine_token_rejected" : "dependency_unavailable"
-    });
-    const userMessage = missingMachineToken
-      ? "UCOS_API_TOKEN is missing from the Modern Living Hub backend configuration. Pinterest authorization was not started."
-      : rejectedMachineToken
-        ? "UCOS rejected the Modern Living Hub machine credential. Verify UCOS_API_TOKEN in Render before connecting Pinterest."
-        : "UCOS account API is temporarily unavailable. Pinterest authorization was not started, so no one-time authorization code was consumed. Please retry shortly.";
-    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(userMessage)}`);
-  }
-
-  const state=createState(); if(!req.session.sessionId) req.session.sessionId=crypto.randomUUID(); req.session.oauth_state=state;
+  if (!process.env.PINTEREST_AGENT_API_URL || !process.env.PINTEREST_AGENT_INGEST_KEY) return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Pinterest Agent API is not configured.")}`);
+  const state=createState(); if(!req.session.sessionId)req.session.sessionId=crypto.randomUUID(); req.session.oauth_state=state;
   res.cookie("mlh.oauth_state",state,{httpOnly:true,secure:isProduction,sameSite:isProduction?"none":"lax",maxAge:600000,signed:true});
   res.redirect(buildAuthUrl(state,req.query.prompt||null));
 });
@@ -335,19 +215,6 @@ app.get("/auth/pinterest/callback", async (req,res) => {
   if(!((sessionState&&state===sessionState)||(cookieState&&state===cookieState))){res.clearCookie("mlh.oauth_state");return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=Invalid OAuth state. Please try again.`);}
   delete req.session.oauth_state; res.clearCookie("mlh.oauth_state");
 
-  // Recheck the real UCOS account endpoint immediately before consuming Pinterest's
-  // one-time authorization code. Health alone can be green while the account API is not.
-  try {
-    await listPinterestAccounts();
-  } catch (err) {
-    const message = String(err?.message || err);
-    const missingMachineToken = /UCOS_API_TOKEN is not configured/i.test(message);
-    console.warn("[pinterest] UCOS account preflight failed; Pinterest code left unexchanged", message);
-    const userMessage = missingMachineToken
-      ? "UCOS_API_TOKEN is missing from the Modern Living Hub backend configuration. Pinterest authorization was not completed."
-      : "UCOS is temporarily unavailable. Pinterest authorization code was not exchanged. Return to this page and start a fresh Connect Pinterest flow when UCOS is available.";
-    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(userMessage)}`);
-  }
 
   try {
     const basic=Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
@@ -377,49 +244,16 @@ app.get("/auth/pinterest/callback", async (req,res) => {
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(err?.message||"Pinterest authentication failed.")}`);
   }
 });
-app.get("/api/pinterest/status",async(req,res)=>{
-  const accountId=getAccountId(req); if(!accountId)return res.json({connected:false});
-  try{const result=await pinterestOperation(accountId,"account");res.json({connected:true,id:result?.data?.id||null,username:result?.data?.username||null});}
-  catch{res.json({connected:false,needs_reauth:true});}
-});
-app.post("/api/pinterest/complete",async(req,res)=>{
-  const {handoff}=req.body; if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});
-  const entry=consumeHandoff(handoff); if(!entry)return res.status(400).json({error:"Invalid or expired handoff code."});
-  try{await pinterestOperation(entry.accountId,"account");res.json({connected:true,session_token:createSessionToken(entry.accountId)});}
-  catch{res.status(400).json({error:"Pinterest credentials are not available in UCOS. Please reconnect."});}
-});
-// Canonical account inventory is intentionally not exposed through an unauthenticated MLH endpoint.
-// The OAuth callback uses the server-to-server UCOS credential client directly.
-app.post("/api/pinterest/disconnect",async(req,res)=>{
-  const accountId=getAccountId(req);
-  if(accountId){try{const accounts=await listPinterestAccounts();const account=accounts.find(a=>a.account_id===accountId);if(account?.credentials_ref)await revokePinterestCredential(accountId,account.credentials_ref);}catch(err){console.error("Pinterest credential revoke failed:",err?.message||String(err));}
-    for(const [token,entry] of sessionTokenStore.entries())if(entry.accountId===accountId)sessionTokenStore.delete(token);}
-  delete req.session.pinterestAccountId; delete req.session.oauth_state; res.json({disconnected:true});
-});
-app.get("/api/pinterest/boards",async(req,res)=>{
-  const accountId=getAccountId(req);if(!accountId)return res.status(401).json({error:"Not connected to Pinterest."});
-  try{const result=await pinterestOperation(accountId,"boards");res.json({boards:result?.data?.items||[]});}
-  catch{res.status(502).json({error:"Could not reach Pinterest API through UCOS."});}
-});
-app.get("/api/pinterest/account",async(req,res)=>{
-  const accountId=getAccountId(req);if(!accountId)return res.status(401).json({error:"Not connected to Pinterest."});
-  try{const result=await pinterestOperation(accountId,"account");const data=result?.data||{};res.json({connected:true,id:data.id||null,username:data.username||null,display_name:data.display_name||null,profile_image:data.profile_image||null,website_url:data.website_url||null});}
-  catch{res.status(401).json({error:"Pinterest credential is invalid or expired. Please reconnect."});}
-});
-app.post("/api/pinterest/pins",async(req,res)=>{
-  const accountId=getAccountId(req);if(!accountId)return res.status(401).json({error:"Not connected to Pinterest."});
-  const {board_id,title,description,image_url,destination_url}=req.body;
-  if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});
-  try{const result=await pinterestOperation(accountId,"create_pin",{board_id:String(board_id),title:String(title),description:String(description||""),image_url:String(image_url),destination_url:String(destination_url)});const data=result?.data||{};res.json({success:true,pin:{id:data.id,title:data.title,link:data.link,board_id:data.board_id,created_at:data.created_at}});}
-  catch(err){res.status(502).json({error:err?.message||"Pinterest rejected the Pin request."});}
-});
-app.post("/api/pinterest/boards",async(req,res)=>{
-  const accountId=getAccountId(req);if(!accountId)return res.status(401).json({error:"Not connected to Pinterest."});
-  const {name,description}=req.body;if(!name)return res.status(400).json({error:"Board name is required."});
-  try{const result=await pinterestOperation(accountId,"create_board",{name:String(name),description:String(description||"")});const data=result?.data||{};res.json({success:true,board:{id:data.id,name:data.name,description:data.description}});}
-  catch(err){res.status(502).json({error:err?.message||"Pinterest rejected the board request."});}
-});
-
+async function pinterestOp(accountId,operation,payload={}) {
+  return agentRequest("/integrations/pinterest/operation",{method:"POST",body:JSON.stringify({account_id:accountId,operation,payload})});
+}
+app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch{res.json({connected:false,needs_reauth:true});}});
+app.post("/api/pinterest/complete",async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
+app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);if(id){try{await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}for(const [t,e] of sessionTokenStore.entries())if(e.accountId===id)sessionTokenStore.delete(t);}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true});});
+app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
+app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
+app.post("/api/pinterest/pins",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {board_id,title,description,image_url,destination_url}=req.body;if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});try{const r=await pinterestOp(id,"create_pin",{board_id:String(board_id),title:String(title),description:String(description||""),image_url:String(image_url),destination_url:String(destination_url)});const d=r.data||{};res.json({success:true,pin:{id:d.id,title:d.title,link:d.link,board_id:d.board_id,created_at:d.created_at}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected Pin request."});}});
+app.post("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {name,description}=req.body;if(!name)return res.status(400).json({error:"Board name is required."});try{const r=await pinterestOp(id,"create_board",{name:String(name),description:String(description||"")});const d=r.data||{};res.json({success:true,board:{id:d.id,name:d.name,description:d.description}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected board request."});}});
 // ─── API error handling helper ───
 // ─── API error handling helper ───
 function handleApiError(status, res) {
