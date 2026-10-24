@@ -220,6 +220,43 @@ async function persistPinterestCredential(tokenData) {
     throw new Error("UCOS credential vault did not confirm storage");
   }
   console.info("[pinterest] credential successfully stored in UCOS L13 vault");
+
+  // Mirror the authorized account credential into the Pinterest Agent's Neon vault.
+  // This is server-to-server only; the Agent encrypts token material at rest.
+  const agentBase = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\\/+$/, "");
+  const agentKey = String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim();
+  if (!agentBase || !agentKey) {
+    throw new Error("Pinterest Agent credential storage is not configured. Set PINTEREST_AGENT_API_URL and PINTEREST_AGENT_INGEST_KEY in Modern Living Hub backend.");
+  }
+  const agentResponse = await fetch(`${agentBase}/integrations/pinterest/credentials`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Credential-Ingest-Key": agentKey
+    },
+    body: JSON.stringify({
+      account_id: String(account.account_id),
+      pinterest_user_id: String(user.id),
+      username: String(user.username || ""),
+      access_token: String(tokenData.access_token),
+      refresh_token: String(tokenData.refresh_token || ""),
+      token_type: String(tokenData.token_type || "bearer"),
+      scope: String(tokenData.scope || SCOPES),
+      expires_at: expiresAt,
+      refresh_token_expires_at: tokenData.refresh_token_expires_at
+        ? new Date(Number(tokenData.refresh_token_expires_at) * 1000).toISOString()
+        : tokenData.refresh_token_expires_in
+          ? new Date(Date.now() + Number(tokenData.refresh_token_expires_in) * 1000).toISOString()
+          : null
+    }),
+    signal: AbortSignal.timeout(15000)
+  });
+  const agentResult = await agentResponse.json().catch(() => ({}));
+  if (!agentResponse.ok || agentResult?.stored !== true) {
+    console.error("[pinterest] Agent Neon credential persistence not confirmed", { status: agentResponse.status });
+    throw new Error("Pinterest Agent did not confirm encrypted credential storage in Neon. Check Agent service configuration before reconnecting.");
+  }
+  console.info("[pinterest] encrypted credential stored in Pinterest Agent Neon vault");
   return { account, user };
 }
 // Once Pinterest issues a token, never re-exchange the same authorization code.
