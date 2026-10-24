@@ -156,7 +156,7 @@ async function fetchPinterestUser(accessToken) {
   return data;
 }
 async function agentRequest(path, options = {}) {
-  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\\/+$/, "");
+  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\/+$/, "");
   const key = String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim();
   if (!base || !key) throw new Error("Pinterest Agent API is not configured.");
   const retryTransient = options.retryTransient === true;
