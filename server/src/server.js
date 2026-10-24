@@ -207,6 +207,7 @@ async function waitForPinterestAgentReady() {
 async function persistPinterestCredential(tokenData) {
   // Render free instances may be asleep; wake and verify the Agent before sending OAuth credentials.
   await waitForPinterestAgentReady();
+  const user = await fetchPinterestUser(tokenData.access_token);
   const expiresAt = tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : null;
   const accountId = `pinterest:${String(user.id)}`;
   const saved = await agentRequest("/integrations/pinterest/credentials", { retryTransient:true, method:"POST", body:JSON.stringify({
