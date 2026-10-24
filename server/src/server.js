@@ -181,7 +181,7 @@ async function agentRequest(path, options = {}) {
   throw lastError || new Error("Pinterest Agent is still starting. Please retry.");
 }
 async function waitForPinterestAgentReady() {
-  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\\/+$/, "");
+  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\/+$/, "");
   if (!base) throw new Error("Pinterest Agent API is not configured.");
   const deadline = Date.now() + 90000;
   let lastError;
