@@ -291,6 +291,10 @@ app.get("/api/health", (req, res) => {
   res.json({ status:"ok", service:"modern-living-hub-backend", pinterest_client_id_configured:Boolean(CLIENT_ID), redirect_uri_configured:Boolean(REDIRECT_URI), frontend_url_configured:Boolean(FRONTEND_URL), ucos_vault_configured:Boolean(process.env.UCOS_API_TOKEN), production_mode:isProduction, sandbox_mode:isSandbox });
 });
 app.get("/auth/pinterest", async (req,res) => {
+  if (!String(process.env.PINTEREST_AGENT_API_URL || "").trim() ||
+      !String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim()) {
+    return res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent("Pinterest Agent Neon credential storage is not configured in the Modern Living Hub backend. No Pinterest authorization was started.")}`);
+  }
   // Do not send the user to Pinterest until both UCOS health and the authenticated
   // account API are reachable. Health alone does not prove UCOS_API_TOKEN is valid.
   // This prevents a predictable callback failure after the user has granted consent.
