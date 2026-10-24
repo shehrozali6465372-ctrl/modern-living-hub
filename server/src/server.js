@@ -180,8 +180,32 @@ async function agentRequest(path, options = {}) {
   }
   throw lastError || new Error("Pinterest Agent is still starting. Please retry.");
 }
+async function waitForPinterestAgentReady() {
+  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\\/+$/, "");
+  if (!base) throw new Error("Pinterest Agent API is not configured.");
+  const deadline = Date.now() + 90000;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${base}/health`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(10000)
+      });
+      const health = await response.json().catch(() => ({}));
+      if (response.ok && health?.status === "ok") return;
+      lastError = new Error(`Pinterest Agent health check HTTP ${response.status}`);
+    } catch (err) {
+      lastError = err;
+    }
+    if (Date.now() + 5000 >= deadline) break;
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+  const reason = String(lastError?.message || "health check timed out").slice(0, 160);
+  throw new Error(`Pinterest Agent did not become healthy within 90 seconds (${reason}). Please restart the Pinterest connection.`);
+}
+
 async function persistPinterestCredential(tokenData) {
-  const user = await fetchPinterestUser(tokenData.access_token);
+  // Render free instances may be asleep; wake and verify the Agent before sending OAuth credentials.\n  await waitForPinterestAgentReady();\n  const user = await fetchPinterestUser(tokenData.access_token);
   const expiresAt = tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : null;
   const accountId = `pinterest:${String(user.id)}`;
   const saved = await agentRequest("/integrations/pinterest/credentials", { retryTransient:true, method:"POST", body:JSON.stringify({
