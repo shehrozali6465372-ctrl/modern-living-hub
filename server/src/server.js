@@ -156,22 +156,26 @@ async function fetchPinterestUser(accessToken) {
   return data;
 }
 async function agentRequest(path, options = {}) {
-  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\/+$/, "");
+  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\\/+$/, "");
   const key = String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim();
   if (!base || !key) throw new Error("Pinterest Agent API is not configured.");
+  const retryTransient = options.retryTransient === true;
+  const requestOptions = { ...options };
+  delete requestOptions.retryTransient;
   let lastError;
-  for (const delay of [0, 5000, 10000, 15000, 20000, 25000]) {
+  const delays = retryTransient ? [0, 5000, 10000, 15000, 20000, 25000] : [0];
+  for (const delay of delays) {
     if (delay) await new Promise(resolve => setTimeout(resolve, delay));
     try {
-      const response = await fetch(`${base}${path}`, { ...options, headers: { "Content-Type": "application/json", "X-Credential-Ingest-Key": key, ...(options.headers || {}) }, signal: AbortSignal.timeout(15000) });
+      const response = await fetch(`${base}${path}`, { ...requestOptions, headers: { "Content-Type": "application/json", "X-Credential-Ingest-Key": key, ...(options.headers || {}) }, signal: AbortSignal.timeout(15000) });
       const body = await response.json().catch(() => ({}));
       if (response.ok) return body;
       const err = new Error(String(body.detail || body.error || `Agent API HTTP ${response.status}`));
-      if (![502,503,504].includes(response.status)) throw err;
+      if (!retryTransient || ![502,503,504].includes(response.status)) throw err;
       lastError = err;
     } catch (err) {
       lastError = err;
-      if (!/fetch failed|ECONNRESET|ETIMEDOUT|timeout|aborted|AbortError|TimeoutError|HTTP 502|HTTP 503|HTTP 504/i.test(String(err?.message || err))) throw err;
+      if (!retryTransient || !/fetch failed|ECONNRESET|ETIMEDOUT|timeout|aborted|AbortError|TimeoutError|HTTP 502|HTTP 503|HTTP 504/i.test(String(err?.message || err))) throw err;
     }
   }
   throw lastError || new Error("Pinterest Agent is still starting. Please retry.");
@@ -180,7 +184,7 @@ async function persistPinterestCredential(tokenData) {
   const user = await fetchPinterestUser(tokenData.access_token);
   const expiresAt = tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : null;
   const accountId = `pinterest:${String(user.id)}`;
-  const saved = await agentRequest("/integrations/pinterest/credentials", { method:"POST", body:JSON.stringify({
+  const saved = await agentRequest("/integrations/pinterest/credentials", { retryTransient:true, method:"POST", body:JSON.stringify({
     account_id:accountId, pinterest_user_id:String(user.id), username:String(user.username || ""),
     access_token:String(tokenData.access_token), refresh_token:String(tokenData.refresh_token || ""),
     token_type:String(tokenData.token_type || "bearer"), scope:String(tokenData.scope || SCOPES), expires_at:expiresAt,
@@ -245,7 +249,8 @@ app.get("/auth/pinterest/callback", async (req,res) => {
   }
 });
 async function pinterestOp(accountId,operation,payload={}) {
-  return agentRequest("/integrations/pinterest/operation",{method:"POST",body:JSON.stringify({account_id:accountId,operation,payload})});
+  const retryTransient = ["account","boards","disconnect"].includes(operation);
+  return agentRequest("/integrations/pinterest/operation",{retryTransient,method:"POST",body:JSON.stringify({account_id:accountId,operation,payload})});
 }
 app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch{res.json({connected:false,needs_reauth:true});}});
 app.post("/api/pinterest/complete",async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
