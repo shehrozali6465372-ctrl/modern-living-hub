@@ -170,9 +170,13 @@ async function agentRequest(path, options = {}) {
       const response = await fetch(`${base}${path}`, { ...requestOptions, headers: { "Content-Type": "application/json", "X-Credential-Ingest-Key": key, ...(options.headers || {}) }, signal: AbortSignal.timeout(15000) });
       const body = await response.json().catch(() => ({}));
       if (response.ok) return body;
-      const err = new Error(String(body.detail || body.error || `Agent API HTTP ${response.status}`));
-      if (!retryTransient || ![502,503,504].includes(response.status)) throw err;
-      lastError = err;
+      if (retryTransient && [502, 503, 504].includes(response.status)) {
+        // Retry based on the HTTP status, not the response body: a sanitized
+        // detail string often omits "HTTP 503" even when the status is transient.
+        lastError = new Error(`Agent API HTTP ${response.status}`);
+        continue;
+      }
+      throw new Error(String(body.detail || body.error || `Agent API HTTP ${response.status}`));
     } catch (err) {
       lastError = err;
       if (!retryTransient || !/fetch failed|ECONNRESET|ETIMEDOUT|timeout|aborted|AbortError|TimeoutError|HTTP 502|HTTP 503|HTTP 504/i.test(String(err?.message || err))) throw err;
