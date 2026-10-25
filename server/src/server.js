@@ -282,7 +282,7 @@ app.get("/auth/pinterest/callback", async (req,res) => {
   }
 });
 async function pinterestOp(accountId,operation,payload={}) {
-  const retryTransient = ["account","boards","disconnect"].includes(operation);
+  const retryTransient = ["account","boards"].includes(operation);
   const request = () => agentRequest("/integrations/pinterest/operation",{
     retryTransient, method:"POST", body:JSON.stringify({account_id:accountId,operation,payload})
   });
