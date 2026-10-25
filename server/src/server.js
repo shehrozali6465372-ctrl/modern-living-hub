@@ -170,9 +170,16 @@ async function agentRequest(path, options = {}) {
       const response = await fetch(`${base}${path}`, { ...requestOptions, headers: { "Content-Type": "application/json", "X-Credential-Ingest-Key": key, ...(options.headers || {}) }, signal: AbortSignal.timeout(15000) });
       const body = await response.json().catch(() => ({}));
       if (response.ok) return body;
-      const err = new Error(String(body.detail || body.error || `Agent API HTTP ${response.status}`));
-      if (!retryTransient || ![502,503,504].includes(response.status)) throw err;
-      lastError = err;
+      if (retryTransient && [502, 503, 504].includes(response.status)) {
+        // Retry based on the HTTP status, not the response body: a sanitized
+        // detail string often omits "HTTP 503" even when the status is transient.
+        lastError = new Error(`Agent API HTTP ${response.status}`);
+        lastError.status = response.status;
+        continue;
+      }
+      const error = new Error(String(body.detail || body.error || `Agent API HTTP ${response.status}`));
+      error.status = response.status;
+      throw error;
     } catch (err) {
       lastError = err;
       if (!retryTransient || !/fetch failed|ECONNRESET|ETIMEDOUT|timeout|aborted|AbortError|TimeoutError|HTTP 502|HTTP 503|HTTP 504/i.test(String(err?.message || err))) throw err;
@@ -275,8 +282,24 @@ app.get("/auth/pinterest/callback", async (req,res) => {
   }
 });
 async function pinterestOp(accountId,operation,payload={}) {
-  const retryTransient = ["account","boards","disconnect"].includes(operation);
-  return agentRequest("/integrations/pinterest/operation",{retryTransient,method:"POST",body:JSON.stringify({account_id:accountId,operation,payload})});
+  const retryTransient = ["account","boards"].includes(operation);
+  const request = () => agentRequest("/integrations/pinterest/operation",{
+    retryTransient, method:"POST", body:JSON.stringify({account_id:accountId,operation,payload})
+  });
+  try {
+    return await request();
+  } catch (err) {
+    // A 401 from the Agent means the stored Pinterest access token was rejected.
+    // Refresh once through the trusted server-to-server boundary, then retry the
+    // original operation exactly once. Never refresh or retry a disconnect.
+    if (err?.status !== 401 || operation === "disconnect") throw err;
+    await agentRequest("/integrations/pinterest/refresh",{
+      retryTransient:true,
+      method:"POST",
+      body:JSON.stringify({account_id:accountId,client_id:CLIENT_ID,client_secret:CLIENT_SECRET})
+    });
+    return request();
+  }
 }
 app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch{res.json({connected:false,needs_reauth:true});}});
 app.post("/api/pinterest/complete",async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
