@@ -157,5 +157,3 @@ try {
   // server.js currently owns its listener internally; terminate this standalone test process.
   process.exit(exitCode);
 }
-
-[executed on device: localhost (bb54f029-ff20-4907-ad1f-8b963b1958c1)]
