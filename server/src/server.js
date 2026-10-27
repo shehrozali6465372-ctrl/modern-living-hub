@@ -190,13 +190,15 @@ async function agentRequest(path, options = {}) {
 async function waitForPinterestAgentReady() {
   const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\/+$/, "");
   if (!base) throw new Error("Pinterest Agent API is not configured.");
-  const deadline = Date.now() + 90000;
+  const timeoutMs = Math.max(100, Number(process.env.PINTEREST_AGENT_READY_TIMEOUT_MS) || 90000);
+  const retryDelayMs = Math.max(1, Number(process.env.PINTEREST_AGENT_READY_RETRY_MS) || 5000);
+  const deadline = Date.now() + timeoutMs;
   let lastError;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`${base}/health`, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(Math.min(10000, timeoutMs))
       });
       const health = await response.json().catch(() => ({}));
       if (response.ok && health?.status === "ok") return;
@@ -204,11 +206,11 @@ async function waitForPinterestAgentReady() {
     } catch (err) {
       lastError = err;
     }
-    if (Date.now() + 5000 >= deadline) break;
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    if (Date.now() + retryDelayMs >= deadline) break;
+    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
   }
   const reason = String(lastError?.message || "health check timed out").slice(0, 160);
-  throw new Error(`Pinterest Agent did not become healthy within 90 seconds (${reason}). Please restart the Pinterest connection.`);
+  throw new Error(`Pinterest Agent did not become healthy within ${Math.round(timeoutMs / 1000)} seconds (${reason}). Please retry Connect Pinterest when the Agent is healthy.`);
 }
 
 async function persistPinterestCredential(tokenData) {
@@ -254,6 +256,10 @@ app.get("/auth/pinterest/callback", async (req,res) => {
 
 
   try {
+    // Authorization codes are single-use. Verify the downstream credential store
+    // is reachable BEFORE exchanging the code, otherwise an Agent outage consumes
+    // the code and leaves us unable to complete the connection without fresh consent.
+    await waitForPinterestAgentReady();
     const basic=Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
     const body=new URLSearchParams({grant_type:"authorization_code",code:code.toString(),redirect_uri:REDIRECT_URI,continuous_refresh:"true"});
     const tokenRes=await fetch(PINTEREST_TOKEN_URL,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded",Authorization:`Basic ${basic}`},body:body.toString()});
