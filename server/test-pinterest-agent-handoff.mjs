@@ -14,11 +14,13 @@ process.env.NODE_ENV = "test";
 process.env.PORT = "3518";
 process.env.PINTEREST_AGENT_API_URL = "https://agent.mock.invalid";
 process.env.PINTEREST_AGENT_INGEST_KEY = "test-service-ingest-key";
+process.env.PINTEREST_AGENT_READY_TIMEOUT_MS = "100";
+process.env.PINTEREST_AGENT_READY_RETRY_MS = "1";
 
 const localBase = `http://127.0.0.1:${process.env.PORT}`;
 const agentBase = process.env.PINTEREST_AGENT_API_URL;
 const realFetch = globalThis.fetch;
-const observed = { credentialRequests: [], operations: [], storeAllowed: true };
+const observed = { credentialRequests: [], operations: [], storeAllowed: true, agentHealthy: true, tokenExchanges: 0 };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -32,6 +34,7 @@ globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
   if (url.startsWith(localBase)) return realFetch(input, init);
   if (url === "https://api.pinterest.com/v5/oauth/token") {
+    observed.tokenExchanges += 1;
     return new Response(JSON.stringify(fakeTokens), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (url === "https://api.pinterest.com/v5/user_account") {
@@ -39,7 +42,7 @@ globalThis.fetch = async (input, init = {}) => {
     return new Response(JSON.stringify({ id: "123456789", username: "mlh_test_user" }), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (url === `${agentBase}/health`) {
-    return new Response(JSON.stringify({ status: "ok", service: "pinterest-affiliate-model-1" }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ status: observed.agentHealthy ? "ok" : "unavailable", service: "pinterest-affiliate-model-1" }), { status: observed.agentHealthy ? 200 : 502, headers: { "content-type": "application/json" } });
   }
   if (url === `${agentBase}/integrations/pinterest/credentials`) {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
@@ -97,6 +100,17 @@ let exitCode = 0;
 try {
   await import("./src/server.js");
   await waitForLocalServer();
+
+  // Agent outage must be detected before exchanging Pinterest's single-use code.
+  observed.agentHealthy = false;
+  const blockedFlow = await startOAuth();
+  const blockedCallback = await callback(blockedFlow);
+  assert.equal(blockedCallback.status, 302);
+  const blockedUrl = new URL(blockedCallback.headers.get("location"));
+  assert.ok(blockedUrl.searchParams.has("pinterest_error"));
+  assert.equal(observed.tokenExchanges, 0, "must not consume the authorization code while Agent is unhealthy");
+  assert.equal(observed.credentialRequests.length, 0);
+  observed.agentHealthy = true;
 
   // Successful OAuth -> Agent credential ingestion -> one-time handoff -> account check.
   const flow = await startOAuth();
