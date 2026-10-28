@@ -140,7 +140,7 @@ try {
   assert.equal(complete.status, 200);
   const completeBody = await complete.json();
   assert.equal(completeBody.connected, true);
-  assert.ok(/^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/.test(completeBody.session_token));
+  assert.ok(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(completeBody.session_token));
   assert.ok(!JSON.stringify(completeBody).includes(fakeTokens.access_token));
   assert.ok(!JSON.stringify(completeBody).includes(fakeTokens.refresh_token));
 
