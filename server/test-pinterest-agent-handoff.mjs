@@ -140,7 +140,7 @@ try {
   assert.equal(complete.status, 200);
   const completeBody = await complete.json();
   assert.equal(completeBody.connected, true);
-  assert.ok(/^[a-f0-9]{64}$/.test(completeBody.session_token));
+  assert.ok(/^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/.test(completeBody.session_token));
   assert.ok(!JSON.stringify(completeBody).includes(fakeTokens.access_token));
   assert.ok(!JSON.stringify(completeBody).includes(fakeTokens.refresh_token));
 
@@ -151,6 +151,13 @@ try {
   assert.deepEqual(await status.json(), { connected: true, id: "123456789", username: "mlh_test_user" });
   assert.equal(observed.operations.length, 2);
   assert.ok(observed.operations.every((entry) => entry.account_id === "pinterest:123456789" && entry.operation === "account"));
+
+  // Signed sessions must not depend on per-process memory and must reject tampering.
+  const tamperedToken = completeBody.session_token.replace(/.$/, completeBody.session_token.endsWith("a") ? "b" : "a");
+  const tamperedStatus = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${tamperedToken}` },
+  });
+  assert.deepEqual(await tamperedStatus.json(), { connected: false });
 
   // Fail closed: if Agent does not confirm encrypted storage, Hub must not claim success.
   observed.storeAllowed = false;
