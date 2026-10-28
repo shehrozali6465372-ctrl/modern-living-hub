@@ -119,7 +119,6 @@ app.use((req, res, next) => {
 // ─── Pinterest Agent-backed credential boundary ───
 const handoffStore = new Map();
 const HANDOFF_TTL_MS = 5 * 60 * 1000;
-const sessionTokenStore = new Map();
 const SESSION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 function createHandoff(accountId) {
@@ -133,19 +132,44 @@ function consumeHandoff(code) {
   if (Date.now() > entry.expiresAt) { handoffStore.delete(code); return null; }
   handoffStore.delete(code); return entry;
 }
+// Signed, stateless Hub session tokens survive Render restarts and work across
+// instances. They contain only an account ID and expiry, never Pinterest tokens.
+// Pinterest credentials remain encrypted in the Agent's Neon database.
+function signSessionPayload(encodedPayload) {
+  return crypto.createHmac("sha256", SESSION_SECRET).update(encodedPayload).digest("base64url");
+}
 function createSessionToken(accountId) {
-  const token = crypto.randomBytes(32).toString("hex");
-  sessionTokenStore.set(token, { accountId, expiresAt: Date.now() + SESSION_TOKEN_TTL_MS });
-  return token;
+  const payload = Buffer.from(JSON.stringify({
+    accountId,
+    expiresAt: Date.now() + SESSION_TOKEN_TTL_MS,
+    nonce: crypto.randomBytes(16).toString("hex"),
+  })).toString("base64url");
+  return `${payload}.${signSessionPayload(payload)}`;
+}
+function readSessionToken(token) {
+  if (typeof token !== "string") return null;
+  const separator = token.lastIndexOf(".");
+  if (separator <= 0 || separator === token.length - 1) return null;
+  const payload = token.slice(0, separator);
+  const suppliedSignature = token.slice(separator + 1);
+  const expectedSignature = signSessionPayload(payload);
+  const supplied = Buffer.from(suppliedSignature);
+  const expected = Buffer.from(expectedSignature);
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
+  try {
+    const entry = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (typeof entry.accountId !== "string" || !entry.accountId.startsWith("pinterest:") ||
+        !Number.isFinite(entry.expiresAt) || Date.now() >= entry.expiresAt) return null;
+    return entry.accountId;
+  } catch {
+    return null;
+  }
 }
 function getAccountId(req) {
   const h = req.headers.authorization;
   if (h && h.startsWith("Bearer ")) {
-    const entry = sessionTokenStore.get(h.slice(7));
-    if (entry) {
-      if (Date.now() > entry.expiresAt) sessionTokenStore.delete(h.slice(7));
-      else return entry.accountId;
-    }
+    const accountId = readSessionToken(h.slice(7));
+    if (accountId) return accountId;
   }
   return req.session?.pinterestAccountId || null;
 }
@@ -309,7 +333,7 @@ async function pinterestOp(accountId,operation,payload={}) {
 }
 app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch{res.json({connected:false,needs_reauth:true});}});
 app.post("/api/pinterest/complete",async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
-app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);if(id){try{await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}for(const [t,e] of sessionTokenStore.entries())if(e.accountId===id)sessionTokenStore.delete(t);}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true});});
+app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);if(id){try{await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true});});
 app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
 app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
 app.post("/api/pinterest/pins",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {board_id,title,description,image_url,destination_url}=req.body;if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});try{const r=await pinterestOp(id,"create_pin",{board_id:String(board_id),title:String(title),description:String(description||""),image_url:String(image_url),destination_url:String(destination_url)});const d=r.data||{};res.json({success:true,pin:{id:d.id,title:d.title,link:d.link,board_id:d.board_id,created_at:d.created_at}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected Pin request."});}});
