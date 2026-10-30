@@ -20,7 +20,7 @@ process.env.PINTEREST_AGENT_READY_RETRY_MS = "1";
 const localBase = `http://127.0.0.1:${process.env.PORT}`;
 const agentBase = process.env.PINTEREST_AGENT_API_URL;
 const realFetch = globalThis.fetch;
-const observed = { credentialRequests: [], operations: [], storeAllowed: true, agentHealthy: true, tokenExchanges: 0 };
+const observed = { credentialRequests: [], operations: [], refreshRequests: [], storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -50,10 +50,20 @@ globalThis.fetch = async (input, init = {}) => {
     observed.credentialRequests.push(body);
     return new Response(JSON.stringify(observed.storeAllowed ? { stored: true, account_id: body.account_id } : { stored: false }), { status: 201, headers: { "content-type": "application/json" } });
   }
+  if (url === `${agentBase}/integrations/pinterest/refresh`) {
+    assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
+    const body = JSON.parse(init.body);
+    observed.refreshRequests.push(body);
+    return new Response(JSON.stringify({ refreshed: true, account_id: body.account_id }), { status: 200, headers: { "content-type": "application/json" } });
+  }
   if (url === `${agentBase}/integrations/pinterest/operation`) {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
     const body = JSON.parse(init.body);
     observed.operations.push(body);
+    if (observed.rejectFirstOperation) {
+      observed.rejectFirstOperation = false;
+      return new Response(JSON.stringify({ detail: "Pinterest API rejected or could not complete the operation." }), { status: 401, headers: { "content-type": "application/json" } });
+    }
     return new Response(JSON.stringify({ data: { id: "123456789", username: "mlh_test_user" } }), { status: 200, headers: { "content-type": "application/json" } });
   }
   throw new Error(`Unexpected upstream request in test: ${url}`);
@@ -134,6 +144,9 @@ try {
   assert.ok(Date.parse(credential.expires_at) > Date.now());
   assert.ok(Date.parse(credential.refresh_token_expires_at) > Date.now());
 
+  // A real Agent/Pinterest 401 must trigger exactly one server-side refresh,
+  // then retry the original read-only account lookup once.
+  observed.rejectFirstOperation = true;
   const complete = await realFetch(`${localBase}/api/pinterest/complete`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ handoff }),
   });
@@ -149,8 +162,15 @@ try {
   });
   assert.equal(status.status, 200);
   assert.deepEqual(await status.json(), { connected: true, id: "123456789", username: "mlh_test_user" });
-  assert.equal(observed.operations.length, 2);
+  assert.equal(observed.operations.length, 3);
   assert.ok(observed.operations.every((entry) => entry.account_id === "pinterest:123456789" && entry.operation === "account"));
+  assert.equal(observed.refreshRequests.length, 1, "401 must cause exactly one refresh attempt");
+  assert.deepEqual(observed.refreshRequests[0], {
+    account_id: "pinterest:123456789",
+    client_id: process.env.PINTEREST_CLIENT_ID,
+    client_secret: process.env.PINTEREST_CLIENT_SECRET,
+  });
+  assert.ok(!JSON.stringify(completeBody).includes(process.env.PINTEREST_CLIENT_SECRET));
 
   // Signed sessions must not depend on per-process memory and must reject tampering.
   const tamperedToken = completeBody.session_token.replace(/.$/, completeBody.session_token.endsWith("a") ? "b" : "a");
@@ -169,7 +189,7 @@ try {
   assert.notEqual(failedUrl.searchParams.get("pinterest_connected"), "1");
   assert.equal(observed.credentialRequests.length, 2);
 
-  console.log("PB-04 PASS: OAuth identity, authenticated Agent ingestion, expiry persistence, handoff, account lookup, and fail-closed storage verified (mocked upstreams only).");
+  console.log("PB-05/PB-04 PASS: authenticated Agent ingestion, OAuth handoff, 401-triggered one-time refresh, retry, expiry persistence, and fail-closed storage verified (mocked upstreams only).");
 } catch (error) {
   exitCode = 1;
   console.error("PB-04 FAIL:", error?.stack || String(error));
