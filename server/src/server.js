@@ -323,8 +323,10 @@ async function pinterestOp(accountId,operation,payload={}) {
     // Refresh once through the trusted server-to-server boundary, then retry the
     // original operation exactly once. Never refresh or retry a disconnect.
     if (err?.status !== 401 || operation === "disconnect") throw err;
+    // OAuth refresh can rotate and invalidate the submitted refresh token. A
+    // timeout/5xx may be an ambiguous outcome, so never automatically replay
+    // this non-idempotent POST; let the caller reconcile or reconnect instead.
     await agentRequest("/integrations/pinterest/refresh",{
-      retryTransient:true,
       method:"POST",
       body:JSON.stringify({account_id:accountId,client_id:CLIENT_ID,client_secret:CLIENT_SECRET})
     });
