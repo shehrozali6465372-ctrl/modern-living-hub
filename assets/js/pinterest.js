@@ -343,6 +343,84 @@
         });
     }
 
+    // ─── Read-only listing of existing Pinterest Pins ───
+    var loadPinsBtn = document.getElementById('load-pins-btn');
+    var loadMorePinsBtn = document.getElementById('load-more-pins-btn');
+    var pinsListStatus = document.getElementById('pins-list-status');
+    var existingPinsList = document.getElementById('existing-pins-list');
+    var pinsBookmark = null;
+    var pinsLoaded = false;
+
+    function appendPinCard(pin) {
+        var card = document.createElement('article');
+        card.className = 'pinterest-card';
+        card.style.marginTop = '0.75rem';
+        var heading = document.createElement('h4');
+        heading.textContent = pin.title || 'Untitled Pin';
+        var id = document.createElement('p');
+        id.textContent = 'Pin ID: ' + String(pin.id || 'Unavailable');
+        var description = document.createElement('p');
+        description.textContent = pin.description || '';
+        var board = document.createElement('p');
+        board.textContent = 'Board ID: ' + String(pin.board_id || 'Unavailable');
+        card.appendChild(heading);
+        card.appendChild(id);
+        if (description.textContent) card.appendChild(description);
+        card.appendChild(board);
+        if (pin.link) {
+            var link = document.createElement('a');
+            link.href = pin.link;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = 'Open Pin on Pinterest';
+            card.appendChild(link);
+        }
+        existingPinsList.appendChild(card);
+    }
+
+    async function loadExistingPins(append) {
+        if (!isBackendConfigured() || !existingPinsList || !pinsListStatus) return;
+        if (!append) {
+            pinsBookmark = null;
+            existingPinsList.replaceChildren();
+            pinsLoaded = false;
+        }
+        pinsListStatus.textContent = 'Loading existing Pins…';
+        if (loadPinsBtn) loadPinsBtn.disabled = true;
+        if (loadMorePinsBtn) loadMorePinsBtn.disabled = true;
+        try {
+            var query = '?page_size=50';
+            if (append && pinsBookmark) query += '&bookmark=' + encodeURIComponent(pinsBookmark);
+            var res = await fetch(BACKEND + '/api/pinterest/pins/list' + query, {
+                method: 'GET', credentials: 'include', headers: authHeaders()
+            });
+            var data = await res.json().catch(function () { return {}; });
+            if (!res.ok) {
+                pinsListStatus.textContent = res.status === 401
+                    ? 'Session authentication failed. Refresh this page or reconnect Pinterest.'
+                    : (data.error || 'Could not load Pinterest Pins.');
+                if (loadMorePinsBtn) loadMorePinsBtn.style.display = 'none';
+                return;
+            }
+            var pins = Array.isArray(data.pins) ? data.pins : [];
+            pins.forEach(appendPinCard);
+            pinsBookmark = data.bookmark || null;
+            pinsLoaded = true;
+            pinsListStatus.textContent = pins.length
+                ? 'Loaded ' + pins.length + ' Pin(s).' + (pinsBookmark ? ' More Pins are available.' : ' End of list.')
+                : (append ? 'No additional Pins found.' : 'No Pins found for this account.');
+            if (loadMorePinsBtn) loadMorePinsBtn.style.display = pinsBookmark ? 'inline-block' : 'none';
+        } catch (err) {
+            pinsListStatus.textContent = 'Could not reach the Hub API. Please retry.';
+        } finally {
+            if (loadPinsBtn) loadPinsBtn.disabled = false;
+            if (loadMorePinsBtn) loadMorePinsBtn.disabled = false;
+        }
+    }
+
+    if (loadPinsBtn) loadPinsBtn.addEventListener('click', function () { loadExistingPins(false); });
+    if (loadMorePinsBtn) loadMorePinsBtn.addEventListener('click', function () { if (pinsLoaded && pinsBookmark) loadExistingPins(true); });
+
     // ─── Attach native Pinterest product tags to an existing hero Pin ───
     var productTagsForm = document.getElementById("product-tags-form");
     var productTagsResult = document.getElementById("product-tags-result");
