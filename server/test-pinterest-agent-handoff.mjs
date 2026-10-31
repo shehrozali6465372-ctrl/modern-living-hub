@@ -20,7 +20,7 @@ process.env.PINTEREST_AGENT_READY_RETRY_MS = "1";
 const localBase = `http://127.0.0.1:${process.env.PORT}`;
 const agentBase = process.env.PINTEREST_AGENT_API_URL;
 const realFetch = globalThis.fetch;
-const observed = { credentialRequests: [], operations: [], refreshRequests: [], storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false };
+const observed = { credentialRequests: [], operations: [], refreshRequests: [], storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200 };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -54,7 +54,7 @@ globalThis.fetch = async (input, init = {}) => {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
     const body = JSON.parse(init.body);
     observed.refreshRequests.push(body);
-    return new Response(JSON.stringify({ refreshed: true, account_id: body.account_id }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(observed.refreshStatus === 200 ? { refreshed: true, account_id: body.account_id } : { detail: "sanitized refresh failure" }), { status: observed.refreshStatus, headers: { "content-type": "application/json" } });
   }
   if (url === `${agentBase}/integrations/pinterest/operation`) {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
@@ -172,6 +172,21 @@ try {
   });
   assert.ok(!JSON.stringify(completeBody).includes(process.env.PINTEREST_CLIENT_SECRET));
 
+  // A refresh 5xx is an ambiguous, non-idempotent OAuth outcome. The Hub must
+  // make exactly one refresh attempt and must not replay the old refresh token.
+  observed.rejectFirstOperation = true;
+  observed.refreshStatus = 503;
+  const refreshCountBeforeFailure = observed.refreshRequests.length;
+  const operationCountBeforeFailure = observed.operations.length;
+  const failedRefreshStatus = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(failedRefreshStatus.status, 200);
+  assert.deepEqual(await failedRefreshStatus.json(), { connected: false, needs_reauth: true });
+  assert.equal(observed.refreshRequests.length, refreshCountBeforeFailure + 1, "ambiguous OAuth refresh must never be automatically replayed");
+  assert.equal(observed.operations.length, operationCountBeforeFailure + 1, "do not retry the protected operation when refresh was not confirmed");
+  observed.refreshStatus = 200;
+
   // Signed sessions must not depend on per-process memory and must reject tampering.
   const tamperedToken = completeBody.session_token.replace(/.$/, completeBody.session_token.endsWith("a") ? "b" : "a");
   const tamperedStatus = await realFetch(`${localBase}/api/pinterest/status`, {
@@ -189,7 +204,7 @@ try {
   assert.notEqual(failedUrl.searchParams.get("pinterest_connected"), "1");
   assert.equal(observed.credentialRequests.length, 2);
 
-  console.log("PB-05/PB-04 PASS: authenticated Agent ingestion, OAuth handoff, 401-triggered one-time refresh, retry, expiry persistence, and fail-closed storage verified (mocked upstreams only).");
+  console.log("PB-05/PB-04 PASS: authenticated Agent ingestion, OAuth handoff, one-time 401 refresh, no replay after ambiguous refresh 5xx, retry, expiry persistence, and fail-closed storage verified (mocked upstreams only).");
 } catch (error) {
   exitCode = 1;
   console.error("PB-04 FAIL:", error?.stack || String(error));
