@@ -350,6 +350,8 @@
     var existingPinsList = document.getElementById('existing-pins-list');
     var pinsBookmark = null;
     var pinsLoaded = false;
+    var eligibleProductPinCount = 0;
+    var productPinDiscoveryStatus = document.getElementById('product-pin-discovery-status');
 
     function appendPinCard(pin) {
         var card = document.createElement('article');
@@ -363,10 +365,38 @@
         description.textContent = pin.description || '';
         var board = document.createElement('p');
         board.textContent = 'Board ID: ' + String(pin.board_id || 'Unavailable');
+        var productStatus = document.createElement('p');
+        productStatus.textContent = pin.is_product === true ? 'Pinterest type: Eligible Product Pin' : 'Pinterest type: Standard / non-product Pin';
         card.appendChild(heading);
         card.appendChild(id);
+        card.appendChild(productStatus);
         if (description.textContent) card.appendChild(description);
         card.appendChild(board);
+        if (pin.is_product === true) {
+            eligibleProductPinCount += 1;
+            var selectProduct = document.createElement('button');
+            selectProduct.type = 'button';
+            selectProduct.className = 'btn btn-secondary';
+            selectProduct.textContent = 'Use as Product Tag';
+            selectProduct.addEventListener('click', function () {
+                var field = document.getElementById('product-pin-ids');
+                if (!field) return;
+                var ids = field.value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+                if (!ids.includes(String(pin.id))) ids.push(String(pin.id));
+                field.value = ids.join(', ');
+            });
+            card.appendChild(selectProduct);
+        } else {
+            var selectHero = document.createElement('button');
+            selectHero.type = 'button';
+            selectHero.className = 'btn btn-secondary';
+            selectHero.textContent = 'Use as Hero Pin';
+            selectHero.addEventListener('click', function () {
+                var field = document.getElementById('hero-pin-id');
+                if (field) field.value = String(pin.id || '');
+            });
+            card.appendChild(selectHero);
+        }
         if (pin.link) {
             var link = document.createElement('a');
             link.href = pin.link;
@@ -382,6 +412,7 @@
         if (!isBackendConfigured() || !existingPinsList || !pinsListStatus) return;
         if (!append) {
             pinsBookmark = null;
+            eligibleProductPinCount = 0;
             existingPinsList.replaceChildren();
             pinsLoaded = false;
         }
@@ -409,6 +440,13 @@
             pinsListStatus.textContent = pins.length
                 ? 'Loaded ' + pins.length + ' Pin(s).' + (pinsBookmark ? ' More Pins are available.' : ' End of list.')
                 : (append ? 'No additional Pins found.' : 'No Pins found for this account.');
+            if (productPinDiscoveryStatus) {
+                productPinDiscoveryStatus.textContent = eligibleProductPinCount
+                    ? 'Found ' + eligibleProductPinCount + ' eligible Product Pin(s) on the pages loaded. Use “Use as Product Tag” to select them.'
+                    : (pinsBookmark
+                        ? 'No eligible Product Pins on the pages loaded yet. Load more Pins or create a Product Pin in Pinterest using the product-page link, then reload.'
+                        : 'No eligible Product Pins found in this account listing. Create a Product Pin in Pinterest using the product-page link, then reload this list.');
+            }
             if (loadMorePinsBtn) loadMorePinsBtn.style.display = pinsBookmark ? 'inline-block' : 'none';
         } catch (err) {
             pinsListStatus.textContent = 'Could not reach the Hub API. Please retry.';
