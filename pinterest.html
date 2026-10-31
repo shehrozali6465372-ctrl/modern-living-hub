@@ -113,6 +113,16 @@
                     </form>
                 </div>
 
+                <!-- Read-only list of existing Pinterest Pins -->
+                <div class="pinterest-card-section" id="existing-pins-section">
+                    <h3>Existing Pinterest Pins</h3>
+                    <p>Read-only view of Pins already published to your Pinterest account. This section never creates or edits Pins.</p>
+                    <button type="button" class="btn btn-primary" id="load-pins-btn">Load Existing Pins</button>
+                    <p id="pins-list-status" role="status" aria-live="polite" style="margin-top:0.75rem;"></p>
+                    <div id="existing-pins-list" aria-live="polite"></div>
+                    <button type="button" class="btn btn-secondary" id="load-more-pins-btn" style="display:none; margin-top:1rem;">Load More Pins</button>
+                </div>
+
                 <!-- Tag products on an existing Pin -->
                 <div class="pinterest-card-section">
                     <h3>Tag Products on an Existing Pin</h3>
