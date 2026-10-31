@@ -126,7 +126,9 @@
                 <!-- Tag products on an existing Pin -->
                 <div class="pinterest-card-section">
                     <h3>Tag Products on an Existing Pin</h3>
-                    <p>Use existing Pinterest product Pin IDs. This does not create product Pins from retailer URLs.</p>
+                    <p>Only Pins marked as Product Pin by Pinterest can be tagged. Standard Pins and retailer URLs are not valid product Pin IDs.</p>
+                    <p id="product-pin-discovery-status" role="status" aria-live="polite">Load Existing Pins to discover eligible Product Pins. If none exist, create one in Pinterest using the product-page link, then reload this list.</p>
+                    <p><a href="https://help.pinterest.com/en/business/article/tag-your-products-in-your-pins" target="_blank" rel="noopener noreferrer">Pinterest instructions: create a Product Pin from a product link</a></p>
                     <form id="product-tags-form" class="pinterest-form">
                         <div class="form-group">
                             <label for="hero-pin-id">Hero Pin ID</label>
