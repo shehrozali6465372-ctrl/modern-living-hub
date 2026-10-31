@@ -343,6 +343,42 @@
         });
     }
 
+    // ─── Attach native Pinterest product tags to an existing hero Pin ───
+    var productTagsForm = document.getElementById("product-tags-form");
+    var productTagsResult = document.getElementById("product-tags-result");
+    if (productTagsForm) {
+        productTagsForm.addEventListener("submit", async function (e) {
+            e.preventDefault();
+            var heroPinId = document.getElementById("hero-pin-id").value.trim();
+            var productPinIds = document.getElementById("product-pin-ids").value.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+            if (!heroPinId || productPinIds.length < 1 || productPinIds.length > 24 || new Set(productPinIds).size !== productPinIds.length) {
+                productTagsResult.textContent = "❌ Enter one hero Pin ID and 1–24 unique product Pin IDs.";
+                productTagsResult.style.color = "var(--color-error)";
+                return;
+            }
+            productTagsResult.textContent = "Checking existing tags and attaching missing product tags…";
+            productTagsResult.style.color = "var(--color-text-light)";
+            try {
+                var res = await fetch(BACKEND + "/api/pinterest/pins/" + encodeURIComponent(heroPinId) + "/product-tags", {
+                    method: "POST", credentials: "include",
+                    headers: authHeaders({ "Content-Type": "application/json" }),
+                    body: JSON.stringify({ product_pin_ids: productPinIds })
+                });
+                var data = await res.json();
+                if (!res.ok) {
+                    productTagsResult.textContent = "❌ " + (data.error || "Product tags could not be verified. Inspect current tags before retrying.");
+                    productTagsResult.style.color = "var(--color-error)";
+                    return;
+                }
+                productTagsResult.textContent = "✅ Verified " + data.verified_product_pin_ids.length + " product tag(s) on hero Pin " + data.pin_id + ". Newly attached: " + data.newly_attached.length + "; already present: " + data.already_attached.length + ".";
+                productTagsResult.style.color = "var(--color-success)";
+            } catch (err) {
+                productTagsResult.textContent = "❌ Request outcome may be uncertain. Read current product tags before retrying.";
+                productTagsResult.style.color = "var(--color-error)";
+            }
+        });
+    }
+
     // ─── Disconnect ───
     async function disconnectPinterest() {
         if (!isBackendConfigured()) return;

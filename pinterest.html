@@ -112,6 +112,24 @@
                         <p id="pin-result" style="margin-top:0.75rem;"></p>
                     </form>
                 </div>
+
+                <!-- Tag products on an existing Pin -->
+                <div class="pinterest-card-section">
+                    <h3>Tag Products on an Existing Pin</h3>
+                    <p>Use existing Pinterest product Pin IDs. This does not create product Pins from retailer URLs.</p>
+                    <form id="product-tags-form" class="pinterest-form">
+                        <div class="form-group">
+                            <label for="hero-pin-id">Hero Pin ID</label>
+                            <input type="text" id="hero-pin-id" name="hero_pin_id" placeholder="Pinterest Pin ID to receive tags" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="product-pin-ids">Product Pin IDs (comma-separated, up to 24)</label>
+                            <textarea id="product-pin-ids" name="product_pin_ids" placeholder="Product Pin ID 1, Product Pin ID 2" rows="3" required></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Attach Product Tags</button>
+                        <p id="product-tags-result" style="margin-top:0.75rem;"></p>
+                    </form>
+                </div>
             </div>
         </div>
     </main>
