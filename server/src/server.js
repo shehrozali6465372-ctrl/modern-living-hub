@@ -337,7 +337,7 @@ app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!
 app.post("/api/pinterest/complete",async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
 app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);if(id){try{await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true});});
 app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
-app.get("/api/pinterest/pins/list",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const pageSize=Number(req.query.page_size||100);if(!Number.isInteger(pageSize)||pageSize<1||pageSize>100)return res.status(400).json({error:"page_size must be between 1 and 100."});const payload={page_size:pageSize};if(req.query.bookmark){if(typeof req.query.bookmark!=="string"||req.query.bookmark.length>2000)return res.status(400).json({error:"Invalid bookmark."});payload.bookmark=req.query.bookmark;}try{const r=await pinterestOp(id,"list_pins",payload);res.json({pins:r.data?.items||[],bookmark:r.data?.bookmark||null,read_only:true});}catch(err){res.status(502).json({error:err?.message||"Could not list Pinterest Pins through Agent."});}});
+app.get("/api/pinterest/pins/list",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const pageSize=Number(req.query.page_size||100);if(!Number.isInteger(pageSize)||pageSize<1||pageSize>100)return res.status(400).json({error:"page_size must be between 1 and 100."});const payload={page_size:pageSize,include_protected_pins:true,include_product_tag_obj:true};if(req.query.bookmark){if(typeof req.query.bookmark!=="string"||req.query.bookmark.length>2000)return res.status(400).json({error:"Invalid bookmark."});payload.bookmark=req.query.bookmark;}try{const r=await pinterestOp(id,"list_pins",payload);res.json({pins:r.data?.items||[],bookmark:r.data?.bookmark||null,read_only:true});}catch(err){res.status(502).json({error:err?.message||"Could not list Pinterest Pins through Agent."});}});
 app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
 app.post("/api/pinterest/pins",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {board_id,title,description,image_url,destination_url}=req.body;if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});try{const r=await pinterestOp(id,"create_pin",{board_id:String(board_id),title:String(title),description:String(description||""),image_url:String(image_url),destination_url:String(destination_url)});const d=r.data||{};res.json({success:true,pin:{id:d.id,title:d.title,link:d.link,board_id:d.board_id,created_at:d.created_at}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected Pin request."});}});
 app.get("/api/pinterest/pins/:pinId/product-tags",async(req,res)=>{
@@ -351,6 +351,42 @@ app.post("/api/pinterest/pins/:pinId/product-tags",async(req,res)=>{
   if(!Array.isArray(productPinIds)||productPinIds.length<1||productPinIds.length>24||productPinIds.some(x=>typeof x!=="string"||!x.trim())||new Set(productPinIds).size!==productPinIds.length)return res.status(400).json({error:"Provide 1–24 unique, nonblank existing Pinterest product Pin IDs."});
   try{
     const pinId=String(req.params.pinId);
+    if(productPinIds.map(x=>x.trim()).includes(pinId)) {
+      return res.status(400).json({error:"The hero Pin cannot also be used as a Product Pin tag."});
+    }
+
+    // Server-side eligibility check: never trust manually entered IDs or UI filtering.
+    // Pinterest marks eligible catalog/product Pins with is_product=true.
+    const requestedIds=new Set(productPinIds.map(x=>x.trim()));
+    const eligibleIds=new Set();
+    let bookmark=null;
+    const seenBookmarks=new Set();
+    for(let page=0;page<100;page++) {
+      const payload={page_size:100,include_protected_pins:true,include_product_tag_obj:true};
+      if(bookmark) payload.bookmark=bookmark;
+      const pageResult=await pinterestOp(id,"list_pins",payload);
+      const items=Array.isArray(pageResult.data?.items)?pageResult.data.items:[];
+      for(const pin of items) {
+        if(requestedIds.has(String(pin.id)) && pin.is_product===true) eligibleIds.add(String(pin.id));
+      }
+      if(eligibleIds.size===requestedIds.size) break;
+      const nextBookmark=pageResult.data?.bookmark||null;
+      if(!nextBookmark) break;
+      if(seenBookmarks.has(nextBookmark)) throw new Error("Pinterest Pin pagination repeated a bookmark; Product Pin eligibility could not be fully verified.");
+      seenBookmarks.add(nextBookmark);
+      bookmark=nextBookmark;
+    }
+    if(eligibleIds.size!==requestedIds.size && bookmark) {
+      return res.status(503).json({error:"Pinterest Pin listing exceeded the safe pagination limit. Product Pin eligibility could not be fully verified; no tags were changed."});
+    }
+    const invalidProductPinIds=[...requestedIds].filter(pinId=>!eligibleIds.has(pinId));
+    if(invalidProductPinIds.length) {
+      return res.status(422).json({
+        error:"Every tag target must be an existing Pinterest Pin with is_product=true. Standard Pins, unknown IDs, and retailer URLs are rejected.",
+        invalid_product_pin_ids:invalidProductPinIds
+      });
+    }
+
     const before=await pinterestOp(id,"product_tags",{pin_id:pinId});
     const existing=new Set((before.data?.product_tags||[]).map(x=>String(x.pin_id)));
     const missing=productPinIds.map(x=>x.trim()).filter(x=>!existing.has(x));
