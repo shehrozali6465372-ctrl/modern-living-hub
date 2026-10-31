@@ -339,6 +339,28 @@ app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req)
 app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
 app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
 app.post("/api/pinterest/pins",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {board_id,title,description,image_url,destination_url}=req.body;if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});try{const r=await pinterestOp(id,"create_pin",{board_id:String(board_id),title:String(title),description:String(description||""),image_url:String(image_url),destination_url:String(destination_url)});const d=r.data||{};res.json({success:true,pin:{id:d.id,title:d.title,link:d.link,board_id:d.board_id,created_at:d.created_at}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected Pin request."});}});
+app.get("/api/pinterest/pins/:pinId/product-tags",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  try{const r=await pinterestOp(id,"product_tags",{pin_id:String(req.params.pinId)});res.json({pin_id:String(req.params.pinId),product_tags:r.data?.product_tags||[],read_only:true});}
+  catch(err){res.status(err?.status||502).json({error:err?.message||"Could not read Pinterest product tags."});}
+});
+app.post("/api/pinterest/pins/:pinId/product-tags",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const productPinIds=req.body?.product_pin_ids;
+  if(!Array.isArray(productPinIds)||productPinIds.length<1||productPinIds.length>24||productPinIds.some(x=>typeof x!=="string"||!x.trim())||new Set(productPinIds).size!==productPinIds.length)return res.status(400).json({error:"Provide 1–24 unique, nonblank existing Pinterest product Pin IDs."});
+  try{
+    const pinId=String(req.params.pinId);
+    const before=await pinterestOp(id,"product_tags",{pin_id:pinId});
+    const existing=new Set((before.data?.product_tags||[]).map(x=>String(x.pin_id)));
+    const missing=productPinIds.map(x=>x.trim()).filter(x=>!existing.has(x));
+    if(missing.length)await pinterestOp(id,"add_product_tags",{pin_id:pinId,product_pin_ids:missing});
+    const after=await pinterestOp(id,"product_tags",{pin_id:pinId});
+    const verified=new Set((after.data?.product_tags||[]).map(x=>String(x.pin_id)));
+    const notVerified=productPinIds.map(x=>x.trim()).filter(x=>!verified.has(x));
+    if(notVerified.length)return res.status(502).json({error:"Tag write may have completed, but read-back did not confirm all tags. Inspect current tags before retrying.",missing_product_pin_ids:notVerified});
+    return res.json({success:true,pin_id:pinId,newly_attached:missing,already_attached:productPinIds.map(x=>x.trim()).filter(x=>existing.has(x)),verified_product_pin_ids:productPinIds.map(x=>x.trim())});
+  }catch(err){return res.status(err?.status||502).json({error:err?.message||"Pinterest product tagging failed. Read current tags before retrying."});}
+});
 app.post("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {name,description}=req.body;if(!name)return res.status(400).json({error:"Board name is required."});try{const r=await pinterestOp(id,"create_board",{name:String(name),description:String(description||"")});const d=r.data||{};res.json({success:true,board:{id:d.id,name:d.name,description:d.description}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected board request."});}});
 // ─── API error handling helper ───
 // ─── API error handling helper ───
