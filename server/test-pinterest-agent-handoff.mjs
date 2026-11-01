@@ -148,7 +148,7 @@ try {
   // then retry the original read-only account lookup once.
   observed.rejectFirstOperation = true;
   const complete = await realFetch(`${localBase}/api/pinterest/complete`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ handoff }),
+    method: "POST", headers: { "Content-Type": "application/json", Origin: process.env.FRONTEND_URL }, body: JSON.stringify({ handoff }),
   });
   assert.equal(complete.status, 200);
   const completeBody = await complete.json();
