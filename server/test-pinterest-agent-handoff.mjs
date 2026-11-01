@@ -147,6 +147,11 @@ try {
   // A real Agent/Pinterest 401 must trigger exactly one server-side refresh,
   // then retry the original read-only account lookup once.
   observed.rejectFirstOperation = true;
+  const rejectedOrigin = await realFetch(`${localBase}/api/pinterest/complete`, {
+    method: "POST", headers: { "Content-Type": "application/json", Origin: "https://attacker.invalid" }, body: JSON.stringify({ handoff }),
+  });
+  assert.equal(rejectedOrigin.status, 403, "OAuth handoff completion must reject untrusted origins");
+
   const complete = await realFetch(`${localBase}/api/pinterest/complete`, {
     method: "POST", headers: { "Content-Type": "application/json", Origin: process.env.FRONTEND_URL }, body: JSON.stringify({ handoff }),
   });
