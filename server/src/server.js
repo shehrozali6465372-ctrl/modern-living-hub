@@ -369,7 +369,7 @@ app.post("/api/pinterest/pins",async(req,res)=>{
     res.json({success:true,pin:{id:result.pin_id,title:result.title,link:result.affiliate_url,board_id:result.board_id}});
   }catch(err){
     const status=Number(err?.status)||502;
-    res.status(status).json({error:err?.message||"Pinterest publication failed.",outcome_unknown:status>=500,idempotency_key:idempotencyKey});
+    res.status(status).json({error:err?.message||"Pinterest publication failed.",outcome_unknown:status===502,idempotency_key:idempotencyKey});
   }
 });
 app.post("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {name,description}=req.body;if(!name)return res.status(400).json({error:"Board name is required."});try{const r=await pinterestOp(id,"create_board",{name:String(name),description:String(description||"")});const d=r.data||{};res.json({success:true,board:{id:d.id,name:d.name,description:d.description}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected board request."});}});
