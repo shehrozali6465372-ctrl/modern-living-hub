@@ -282,6 +282,9 @@
         });
     }
 
+    // Keep the same key when the user retries an uncertain submission.
+    var pendingPinIdempotencyKey = null;
+
     // ─── Create Pin ───
     if (createPinForm) {
         createPinForm.addEventListener('submit', async function (e) {
@@ -297,6 +300,7 @@
             var imageUrl = document.getElementById('pin-image-url').value.trim();
             var title = document.getElementById('pin-title').value.trim();
             var description = document.getElementById('pin-description').value.trim();
+            var altText = document.getElementById('pin-alt-text').value.trim();
             var destinationUrl = document.getElementById('pin-destination-url').value.trim();
 
             if (!boardId) {
@@ -304,40 +308,49 @@
                 pinResult.style.color = 'var(--color-error)';
                 return;
             }
-            if (!imageUrl || !title || !destinationUrl) {
-                pinResult.textContent = '❌ Image URL, title, and destination URL are required.';
+            if (!imageUrl || !title || !altText || !destinationUrl) {
+                pinResult.textContent = '❌ Image URL, title, alt text, and destination URL are required.';
                 pinResult.style.color = 'var(--color-error)';
                 return;
             }
 
+            if (!pendingPinIdempotencyKey) {
+                pendingPinIdempotencyKey = (window.crypto && window.crypto.randomUUID)
+                    ? window.crypto.randomUUID()
+                    : 'mlh-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+            }
             pinResult.textContent = 'Publishing pin…';
             pinResult.style.color = 'var(--color-text-light)';
 
             try {
                 var res = await fetch(BACKEND + '/api/pinterest/pins', {
                     method: 'POST',
-                    headers: authHeaders({ 'Content-Type': 'application/json' }),
+                    headers: authHeaders({ 'Content-Type': 'application/json', 'Idempotency-Key': pendingPinIdempotencyKey }),
                     credentials: 'include',
                     body: JSON.stringify({
                         board_id: boardId,
                         title: title,
                         description: description,
+                        alt_text: altText,
                         image_url: imageUrl,
                         destination_url: destinationUrl
                     })
                 });
                 var data = await res.json();
                 if (!res.ok) {
-                    pinResult.textContent = '❌ ' + (data.error || 'Failed to create pin.');
+                    pinResult.textContent = data.outcome_unknown
+                        ? '⚠️ Publish outcome is uncertain. Do not create a new request key; check the Pinterest board and publication record first. ' + (data.error || '')
+                        : '❌ ' + (data.error || 'Failed to create pin.');
                     pinResult.style.color = 'var(--color-error)';
                     return;
                 }
                 pinResult.innerHTML = '✅ Pin published successfully! Pin ID: <strong>' + escapeHtml(data.pin.id) + '</strong>';
                 pinResult.style.color = 'var(--color-success)';
+                pendingPinIdempotencyKey = null;
                 createPinForm.reset();
                 loadBoards();
             } catch {
-                pinResult.textContent = '❌ Could not reach the server. Please try again.';
+                pinResult.textContent = '⚠️ Network outcome is uncertain. Do not submit a new request; verify the Pinterest board before retrying with the same key.';
                 pinResult.style.color = 'var(--color-error)';
             }
         });
