@@ -20,7 +20,7 @@ process.env.PINTEREST_AGENT_READY_RETRY_MS = "1";
 const localBase = `http://127.0.0.1:${process.env.PORT}`;
 const agentBase = process.env.PINTEREST_AGENT_API_URL;
 const realFetch = globalThis.fetch;
-const observed = { credentialRequests: [], operations: [], refreshRequests: [], storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200 };
+const observed = { credentialRequests: [], operations: [], refreshRequests: [], publishRequests: [], storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200 };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -55,6 +55,15 @@ globalThis.fetch = async (input, init = {}) => {
     const body = JSON.parse(init.body);
     observed.refreshRequests.push(body);
     return new Response(JSON.stringify(observed.refreshStatus === 200 ? { refreshed: true, account_id: body.account_id } : { detail: "sanitized refresh failure" }), { status: observed.refreshStatus, headers: { "content-type": "application/json" } });
+  }
+  if (url === `${agentBase}/workflow/publish-hub-pin`) {
+    assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
+    const body = JSON.parse(init.body);
+    observed.publishRequests.push({ body, headers: new Headers(init.headers) });
+    return new Response(JSON.stringify({
+      published: true, pin_id: "mock-ledger-pin-id", title: body.title,
+      board_id: body.board_id, affiliate_url: body.destination_url,
+    }), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (url === `${agentBase}/integrations/pinterest/operation`) {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
@@ -176,6 +185,33 @@ try {
     client_secret: process.env.PINTEREST_CLIENT_SECRET,
   });
   assert.ok(!JSON.stringify(completeBody).includes(process.env.PINTEREST_CLIENT_SECRET));
+
+  // Hub Pin writes must use the Agent's canonical idempotent publication gateway.
+  const hubPinResponse = await realFetch(`${localBase}/api/pinterest/pins`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${completeBody.session_token}`,
+      "Idempotency-Key": "hub-test-pin-0001",
+      Origin: process.env.FRONTEND_URL,
+    },
+    body: JSON.stringify({
+      board_id: "board-test-1",
+      title: "Test kitchen organizer",
+      description: "Useful kitchen organization idea",
+      alt_text: "A three-tier spice rack holding labeled spice jars",
+      image_url: "https://example.com/test-pin.jpg",
+      destination_url: "https://example.com/product?tag=affiliate-20",
+    }),
+  });
+  assert.equal(hubPinResponse.status, 200);
+  const hubPinBody = await hubPinResponse.json();
+  assert.equal(hubPinBody.pin.id, "mock-ledger-pin-id");
+  assert.equal(observed.publishRequests.length, 1);
+  assert.equal(observed.publishRequests[0].headers.get("idempotency-key"), "hub-test-pin-0001");
+  assert.equal(observed.publishRequests[0].body.alt_text, "A three-tier spice rack holding labeled spice jars");
+  assert.equal(observed.publishRequests[0].body.destination_url, "https://example.com/product?tag=affiliate-20");
+  assert.equal(observed.operations.some((entry) => entry.operation === "create_pin"), false);
 
   // A refresh 5xx is an ambiguous, non-idempotent OAuth outcome. The Hub must
   // make exactly one refresh attempt and must not replay the old refresh token.
