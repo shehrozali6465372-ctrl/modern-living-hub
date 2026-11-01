@@ -166,12 +166,12 @@ function readSessionToken(token) {
   }
 }
 function getAccountId(req) {
+  // Pinterest account mutations and reads require the explicit bearer token
+  // returned by the one-time OAuth handoff. Do not authenticate API calls from
+  // an automatically attached cross-site session cookie (CSRF fallback).
   const h = req.headers.authorization;
-  if (h && h.startsWith("Bearer ")) {
-    const accountId = readSessionToken(h.slice(7));
-    if (accountId) return accountId;
-  }
-  return req.session?.pinterestAccountId || null;
+  if (!h || !h.startsWith("Bearer ")) return null;
+  return readSessionToken(h.slice(7));
 }
 async function fetchPinterestUser(accessToken) {
   const response = await fetch(`${PINTEREST_API_BASE}/user_account`, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -334,7 +334,13 @@ async function pinterestOp(accountId,operation,payload={}) {
   }
 }
 app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch{res.json({connected:false,needs_reauth:true});}});
-app.post("/api/pinterest/complete",async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
+app.post("/api/pinterest/complete",(req,res,next)=>{
+  const origin = req.get("origin");
+  if (!origin || !allowedOrigins.includes(origin)) {
+    return res.status(403).json({ error: "Origin not allowed for OAuth handoff completion." });
+  }
+  next();
+},async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
 app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);if(id){try{await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true});});
 app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
 app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
