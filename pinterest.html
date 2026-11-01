@@ -112,36 +112,6 @@
                         <p id="pin-result" style="margin-top:0.75rem;"></p>
                     </form>
                 </div>
-
-                <!-- Read-only list of existing Pinterest Pins -->
-                <div class="pinterest-card-section" id="existing-pins-section">
-                    <h3>Existing Pinterest Pins</h3>
-                    <p>Read-only view of Pins already published to your Pinterest account. This section never creates or edits Pins.</p>
-                    <button type="button" class="btn btn-primary" id="load-pins-btn">Load Existing Pins</button>
-                    <p id="pins-list-status" role="status" aria-live="polite" style="margin-top:0.75rem;"></p>
-                    <div id="existing-pins-list" aria-live="polite"></div>
-                    <button type="button" class="btn btn-secondary" id="load-more-pins-btn" style="display:none; margin-top:1rem;">Load More Pins</button>
-                </div>
-
-                <!-- Tag products on an existing Pin -->
-                <div class="pinterest-card-section">
-                    <h3>Tag Products on an Existing Pin</h3>
-                    <p>Only Pins marked as Product Pin by Pinterest can be tagged. Standard Pins and retailer URLs are not valid product Pin IDs.</p>
-                    <p id="product-pin-discovery-status" role="status" aria-live="polite">Load Existing Pins to discover eligible Product Pins. If none exist, create one in Pinterest using the product-page link, then reload this list.</p>
-                    <p><a href="https://help.pinterest.com/en/business/article/tag-your-products-in-your-pins" target="_blank" rel="noopener noreferrer">Pinterest instructions: create a Product Pin from a product link</a></p>
-                    <form id="product-tags-form" class="pinterest-form">
-                        <div class="form-group">
-                            <label for="hero-pin-id">Hero Pin ID</label>
-                            <input type="text" id="hero-pin-id" name="hero_pin_id" placeholder="Pinterest Pin ID to receive tags" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="product-pin-ids">Product Pin IDs (comma-separated, up to 24)</label>
-                            <textarea id="product-pin-ids" name="product_pin_ids" placeholder="Product Pin ID 1, Product Pin ID 2" rows="3" required></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Attach Product Tags</button>
-                        <p id="product-tags-result" style="margin-top:0.75rem;"></p>
-                    </form>
-                </div>
             </div>
         </div>
     </main>
