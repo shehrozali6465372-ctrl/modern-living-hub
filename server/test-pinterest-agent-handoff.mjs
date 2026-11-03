@@ -14,13 +14,13 @@ process.env.NODE_ENV = "test";
 process.env.PORT = "3518";
 process.env.PINTEREST_AGENT_API_URL = "https://agent.mock.invalid";
 process.env.PINTEREST_AGENT_INGEST_KEY = "test-service-ingest-key";
-process.env.PINTEREST_AGENT_READY_TIMEOUT_MS = "100";
+process.env.PINTEREST_AGENT_READY_TIMEOUT_MS = "1200";
 process.env.PINTEREST_AGENT_READY_RETRY_MS = "1";
 
 const localBase = `http://127.0.0.1:${process.env.PORT}`;
 const agentBase = process.env.PINTEREST_AGENT_API_URL;
 const realFetch = globalThis.fetch;
-const observed = { credentialRequests: [], operations: [], refreshRequests: [], publishRequests: [], storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200 };
+const observed = { credentialRequests: [], operations: [], refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200 };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -42,7 +42,12 @@ globalThis.fetch = async (input, init = {}) => {
     return new Response(JSON.stringify({ id: "123456789", username: "mlh_test_user" }), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (url === `${agentBase}/health`) {
-    return new Response(JSON.stringify({ status: observed.agentHealthy ? "ok" : "unavailable", service: "pinterest-affiliate-model-1" }), { status: observed.agentHealthy ? 200 : 502, headers: { "content-type": "application/json" } });
+    observed.healthRequests += 1;
+    const queuedStatus = observed.healthStatuses.shift();
+    const status = queuedStatus ?? (observed.agentHealthy ? 200 : 502);
+    const headers = { "content-type": "application/json" };
+    if (status === 429) headers["retry-after"] = "0";
+    return new Response(JSON.stringify({ status: status === 200 ? "ok" : "unavailable", service: "pinterest-affiliate-model-1" }), { status, headers });
   }
   if (url === `${agentBase}/integrations/pinterest/credentials`) {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
@@ -131,9 +136,12 @@ try {
   assert.equal(observed.credentialRequests.length, 0);
   observed.agentHealthy = true;
 
-  // Successful OAuth -> Agent credential ingestion -> one-time handoff -> account check.
+  // A 429 must honor Retry-After and retry until the Agent becomes healthy.
+  const healthRequestsBefore429 = observed.healthRequests;
+  observed.healthStatuses = [429, 200];
   const flow = await startOAuth();
   const callbackResponse = await callback(flow);
+  assert.equal(observed.healthRequests - healthRequestsBefore429, 2, "the OAuth callback readiness preflight must retry one 429 then succeed");
   assert.equal(callbackResponse.status, 302);
   const callbackUrl = new URL(callbackResponse.headers.get("location"));
   assert.equal(callbackUrl.searchParams.get("pinterest_connected"), "1");

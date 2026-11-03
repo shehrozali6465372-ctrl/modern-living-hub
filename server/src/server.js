@@ -220,7 +220,9 @@ async function waitForPinterestAgentReady() {
   const retryDelayMs = Math.max(1, Number(process.env.PINTEREST_AGENT_READY_RETRY_MS) || 5000);
   const deadline = Date.now() + timeoutMs;
   let lastError;
+  let attempt = 0;
   while (Date.now() < deadline) {
+    let delayMs = retryDelayMs;
     try {
       const response = await fetch(`${base}/health`, {
         headers: { Accept: "application/json" },
@@ -229,19 +231,35 @@ async function waitForPinterestAgentReady() {
       const health = await response.json().catch(() => ({}));
       if (response.ok && health?.status === "ok") return;
       lastError = new Error(`Pinterest Agent health check HTTP ${response.status}`);
+      if (response.status === 429) {
+        // Honor Retry-After (seconds or HTTP date); otherwise back off exponentially.
+        const retryAfter = response.headers.get("retry-after");
+        const parsed = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter.trim())
+          ? Number(retryAfter.trim()) * 1000
+          : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN;
+        delayMs = Number.isFinite(parsed) && parsed >= 0
+          ? Math.max(250, parsed)
+          : Math.max(250, Math.round(Math.min(30000, retryDelayMs * (2 ** attempt)) * (0.5 + Math.random() * 0.5)));
+      } else if ([502, 503, 504].includes(response.status)) {
+        delayMs = Math.max(250, Math.round(Math.min(30000, retryDelayMs * (2 ** attempt)) * (0.5 + Math.random() * 0.5)));
+      } else {
+        break; // Client/auth/configuration errors will not heal by polling.
+      }
     } catch (err) {
       lastError = err;
+      delayMs = Math.max(250, Math.round(Math.min(30000, retryDelayMs * (2 ** attempt)) * (0.5 + Math.random() * 0.5)));
     }
-    if (Date.now() + retryDelayMs >= deadline) break;
-    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+    attempt += 1;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0 || delayMs >= remainingMs) break;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
   }
   const reason = String(lastError?.message || "health check timed out").slice(0, 160);
   throw new Error(`Pinterest Agent did not become healthy within ${Math.round(timeoutMs / 1000)} seconds (${reason}). Please retry Connect Pinterest when the Agent is healthy.`);
 }
 
 async function persistPinterestCredential(tokenData) {
-  // Render free instances may be asleep; wake and verify the Agent before sending OAuth credentials.
-  await waitForPinterestAgentReady();
+  // The OAuth callback already completed the Agent readiness preflight before consuming the one-time code.
   const user = await fetchPinterestUser(tokenData.access_token);
   const expiresAt = tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : null;
   const accountId = `pinterest:${String(user.id)}`;
