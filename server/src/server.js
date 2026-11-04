@@ -470,7 +470,7 @@ app.post("/api/pinterest/affiliate-schedules/:scheduleId/activate", async (req, 
   const accountId = schedulerAccount(req, res);
   if (!accountId) return;
   const scheduleId = String(req.params.scheduleId || "");
-  if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
+  if (!Number.isSafeInteger(Number(scheduleId)) || Number(scheduleId) <= 0) return res.status(400).json({ error: "Invalid schedule ID." });
   try {
     const current = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
     if (current.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
@@ -484,7 +484,7 @@ app.post("/api/pinterest/affiliate-schedules/:scheduleId/pause", async (req, res
   const accountId = schedulerAccount(req, res);
   if (!accountId) return;
   const scheduleId = String(req.params.scheduleId || "");
-  if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
+  if (!Number.isSafeInteger(Number(scheduleId)) || Number(scheduleId) <= 0) return res.status(400).json({ error: "Invalid schedule ID." });
   try {
     const current = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
     if (current.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
