@@ -82,6 +82,57 @@
                     </form>
                 </div>
 
+                <!-- Affiliate Product URL Manager -->
+                <div class="pinterest-card-section" id="affiliate-scheduler-section">
+                    <h3>Affiliate Product URL Manager</h3>
+                    <p>Add 1–10 affiliate products once, then create a draft schedule. Draft creation does not publish Pins.</p>
+                    <form id="affiliate-scheduler-form" class="pinterest-form">
+                        <div class="form-group">
+                            <label for="affiliate-schedule-start">Start date</label>
+                            <input type="date" id="affiliate-schedule-start" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-timezone">Posting timezone (IANA)</label>
+                            <input type="text" id="affiliate-schedule-timezone" value="America/New_York" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-days">Schedule duration (days)</label>
+                            <input type="number" id="affiliate-schedule-days" min="1" max="30" value="30" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-daily-limit">Maximum Pins per day</label>
+                            <select id="affiliate-schedule-daily-limit">
+                                <option value="5" selected>5 Pins/day</option>
+                                <option value="4">4 Pins/day</option>
+                                <option value="3">3 Pins/day</option>
+                                <option value="2">2 Pins/day</option>
+                                <option value="1">1 Pin/day</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-board">Pinterest board name</label>
+                            <input type="text" id="affiliate-schedule-board" maxlength="100" value="Modern Living Hub | Kitchen &amp; Home Organization" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-board-description">Board description</label>
+                            <input type="text" id="affiliate-schedule-board-description" maxlength="500" value="Kitchen organization, practical home finds, and home decor inspiration.">
+                        </div>
+                        <h4>Product sources</h4>
+                        <div id="affiliate-scheduler-sources"></div>
+                        <button type="button" class="btn btn-secondary" id="affiliate-add-source">Add another product (max 10)</button>
+                        <button type="submit" class="btn btn-primary" id="affiliate-create-draft">Save schedule as draft</button>
+                        <p id="affiliate-scheduler-result" role="status" aria-live="polite"></p>
+                    </form>
+                    <div id="affiliate-schedule-controls" style="display:none; margin-top:1.5rem;">
+                        <h4>Schedule status</h4>
+                        <p id="affiliate-schedule-status" role="status" aria-live="polite"></p>
+                        <button type="button" class="btn btn-primary" id="affiliate-activate-schedule">Activate schedule</button>
+                        <button type="button" class="btn btn-secondary" id="affiliate-pause-schedule">Pause schedule</button>
+                        <button type="button" class="btn btn-secondary" id="affiliate-refresh-schedule">Refresh status</button>
+                        <p><small>Activation queues jobs. The background worker may publish Pins when jobs become due. Pause cancels queued jobs; an in-flight Pin may still finish.</small></p>
+                    </div>
+                </div>
+
                 <!-- Select Board / Create Pin -->
                 <div class="pinterest-card-section">
                     <h3>Create Pinterest Pin</h3>
@@ -179,5 +230,6 @@
       }
     </script>
     <script src="assets/js/pinterest.js" defer></script>
+    <script src="assets/js/affiliate-scheduler.js" defer></script>
 </body>
 </html>
