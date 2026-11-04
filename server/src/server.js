@@ -454,21 +454,26 @@ app.post("/api/pinterest/affiliate-schedules", async (req, res) => {
   }
 });
 app.get("/api/pinterest/affiliate-schedules/:scheduleId", async (req, res) => {
-  if (!schedulerAccount(req, res)) return;
+  const accountId = schedulerAccount(req, res);
+  if (!accountId) return;
   const scheduleId = String(req.params.scheduleId || "");
   if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
   try {
     const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
+    if (result.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
     res.json(result);
   } catch (err) {
     res.status(Number(err.status) || 502).json({ error: err.message || "Could not load schedule status." });
   }
 });
 app.post("/api/pinterest/affiliate-schedules/:scheduleId/activate", async (req, res) => {
-  if (!schedulerAccount(req, res)) return;
+  const accountId = schedulerAccount(req, res);
+  if (!accountId) return;
   const scheduleId = String(req.params.scheduleId || "");
   if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
   try {
+    const current = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
+    if (current.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
     const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}/activate`, { method: "POST", body: "{}" });
     res.json(result);
   } catch (err) {
@@ -476,10 +481,13 @@ app.post("/api/pinterest/affiliate-schedules/:scheduleId/activate", async (req, 
   }
 });
 app.post("/api/pinterest/affiliate-schedules/:scheduleId/pause", async (req, res) => {
-  if (!schedulerAccount(req, res)) return;
+  const accountId = schedulerAccount(req, res);
+  if (!accountId) return;
   const scheduleId = String(req.params.scheduleId || "");
   if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
   try {
+    const current = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
+    if (current.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
     const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}/pause`, { method: "POST", body: "{}" });
     res.json(result);
   } catch (err) {
