@@ -5,7 +5,7 @@
  */
 (function () {
   "use strict";
-  var BACKEND = (window.BACKEND_URL || "").replace(/\\/+$/, "");
+  var BACKEND = (window.BACKEND_URL || "").replace(/\/+$/, "");
   var TOKEN_KEY = "mlh_session_token";
   var SCHEDULE_KEY = "mlh_affiliate_schedule_id";
   var form = document.getElementById("affiliate-scheduler-form");
