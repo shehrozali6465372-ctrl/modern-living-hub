@@ -14,13 +14,14 @@ process.env.NODE_ENV = "test";
 process.env.PORT = "3518";
 process.env.PINTEREST_AGENT_API_URL = "https://agent.mock.invalid";
 process.env.PINTEREST_AGENT_INGEST_KEY = "test-service-ingest-key";
+process.env.PINTEREST_AGENT_APP_API_KEY = "test-scheduler-app-key";
 process.env.PINTEREST_AGENT_READY_TIMEOUT_MS = "1200";
 process.env.PINTEREST_AGENT_READY_RETRY_MS = "1";
 
 const localBase = `http://127.0.0.1:${process.env.PORT}`;
 const agentBase = process.env.PINTEREST_AGENT_API_URL;
 const realFetch = globalThis.fetch;
-const observed = { credentialRequests: [], operations: [], refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200 };
+const observed = { credentialRequests: [], operations: [], refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, schedulerRequests: [] };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -69,6 +70,22 @@ globalThis.fetch = async (input, init = {}) => {
       published: true, pin_id: "mock-ledger-pin-id", title: body.title,
       board_id: body.board_id, affiliate_url: body.destination_url,
     }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (url.startsWith(`${agentBase}/affiliate-scheduler/`)) {
+    assert.equal(new Headers(init.headers).get("x-api-key"), process.env.PINTEREST_AGENT_APP_API_KEY);
+    const parsed = new URL(url);
+    const body = init.body ? JSON.parse(init.body) : null;
+    observed.schedulerRequests.push({ url: parsed.pathname, method: init.method || "GET", body });
+    if (parsed.pathname === "/affiliate-scheduler/schedules" && init.method === "POST") {
+      return new Response(JSON.stringify({ schedule_id: 77, status: "draft", source_count: body.sources.length, jobs_created: 0, publishing_started: false }), { status: 201, headers: { "content-type": "application/json" } });
+    }
+    if (parsed.pathname === "/affiliate-scheduler/schedules/77" && (!init.method || init.method === "GET")) {
+      return new Response(JSON.stringify({ schedule_id: 77, status: "draft", source_count: 1, daily_pin_limit: 5, starts_on: "2026-11-05", ends_on: "2026-12-04", timezone: "America/New_York", job_counts: {} }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (parsed.pathname === "/affiliate-scheduler/schedules/77/activate" || parsed.pathname === "/affiliate-scheduler/schedules/77/pause") {
+      return new Response(JSON.stringify({ schedule_id: 77, status: parsed.pathname.endsWith("activate") ? "active" : "paused", jobs_created: 150 }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ detail: "unexpected scheduler test route" }), { status: 404, headers: { "content-type": "application/json" } });
   }
   if (url === `${agentBase}/integrations/pinterest/operation`) {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
@@ -193,6 +210,41 @@ try {
     client_secret: process.env.PINTEREST_CLIENT_SECRET,
   });
   assert.ok(!JSON.stringify(completeBody).includes(process.env.PINTEREST_CLIENT_SECRET));
+
+  // Scheduler Hub proxy uses a separate server-side API key and binds the connected account.
+  const draftResponse = await realFetch(`${localBase}/api/pinterest/affiliate-schedules`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, Origin: process.env.FRONTEND_URL },
+    body: JSON.stringify({
+      timezone: "America/New_York", starts_on: "2026-11-05", days: 30, daily_pin_limit: 5,
+      board_name: "MLH test board", board_description: "test only",
+      account_id: "pinterest:attacker-controlled",
+      sources: [{ product_name: "Test product", product_details: "Test description", affiliate_url: "https://example.com/item?tag=tracking-20" }],
+    }),
+  });
+  assert.equal(draftResponse.status, 201);
+  const draftBody = await draftResponse.json();
+  assert.equal(draftBody.publishing_started, false);
+  assert.equal(draftBody.jobs_created, 0);
+  const forwardedDraft = observed.schedulerRequests.find((entry) => entry.url === "/affiliate-scheduler/schedules");
+  assert.equal(forwardedDraft.body.account_id, "pinterest:123456789", "Hub must override any browser-supplied account ID");
+  assert.equal(forwardedDraft.body.sources[0].affiliate_url, "https://example.com/item?tag=tracking-20");
+  assert.equal(observed.publishRequests.length, 0, "saving a draft must not publish a Pin");
+  assert.equal(observed.schedulerRequests[0].method, "POST");
+  const schedulerStatus = await realFetch(`${localBase}/api/pinterest/affiliate-schedules/77`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(schedulerStatus.status, 200);
+  const schedulerActivate = await realFetch(`${localBase}/api/pinterest/affiliate-schedules/77/activate`, {
+    method: "POST", headers: { Authorization: `Bearer ${completeBody.session_token}`, "Content-Type": "application/json" }, body: "{}",
+  });
+  assert.equal(schedulerActivate.status, 200);
+  const schedulerPause = await realFetch(`${localBase}/api/pinterest/affiliate-schedules/77/pause`, {
+    method: "POST", headers: { Authorization: `Bearer ${completeBody.session_token}`, "Content-Type": "application/json" }, body: "{}",
+  });
+  assert.equal(schedulerPause.status, 200);
+  assert.equal(observed.schedulerRequests.length, 4);
+  assert.equal(observed.publishRequests.length, 0, "scheduler proxy tests must not call any Pin publication route");
 
   // Hub Pin writes must use the Agent's canonical idempotent publication gateway.
   const hubPinResponse = await realFetch(`${localBase}/api/pinterest/pins`, {
