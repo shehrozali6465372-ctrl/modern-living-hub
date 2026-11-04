@@ -391,6 +391,102 @@ app.post("/api/pinterest/pins",async(req,res)=>{
   }
 });
 app.post("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {name,description}=req.body;if(!name)return res.status(400).json({error:"Board name is required."});try{const r=await pinterestOp(id,"create_board",{name:String(name),description:String(description||"")});const d=r.data||{};res.json({success:true,board:{id:d.id,name:d.name,description:d.description}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected board request."});}});
+
+/**
+ * Affiliate URL scheduler proxy. The browser never receives the Agent APP_API_KEY.
+ * Account identity is derived from the signed Hub bearer session, not request JSON.
+ */
+async function affiliateSchedulerRequest(path, options = {}) {
+  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\\/+$/, "");
+  const key = String(process.env.PINTEREST_AGENT_APP_API_KEY || "").trim();
+  if (!base || !key) {
+    const error = new Error("Affiliate scheduler is not configured on the Hub backend.");
+    error.status = 503;
+    throw error;
+  }
+  const response = await fetch(`${base}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": key,
+      ...(options.headers || {}),
+    },
+    signal: AbortSignal.timeout(60000),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(String(data.detail || data.error || `Affiliate scheduler HTTP ${response.status}`).slice(0, 240));
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+function schedulerAccount(req, res) {
+  const accountId = getAccountId(req);
+  if (!accountId) {
+    res.status(401).json({ error: "Not connected to Pinterest." });
+    return null;
+  }
+  return accountId;
+}
+app.post("/api/pinterest/affiliate-schedules", async (req, res) => {
+  const accountId = schedulerAccount(req, res);
+  if (!accountId) return;
+  const body = req.body || {};
+  const payload = {
+    account_id: accountId,
+    timezone: body.timezone,
+    starts_on: body.starts_on,
+    days: body.days,
+    daily_pin_limit: body.daily_pin_limit,
+    board_name: body.board_name,
+    board_description: body.board_description,
+    sources: body.sources,
+  };
+  try {
+    const result = await affiliateSchedulerRequest("/affiliate-scheduler/schedules", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(Number(err.status) || 502).json({ error: err.message || "Could not create affiliate schedule draft." });
+  }
+});
+app.get("/api/pinterest/affiliate-schedules/:scheduleId", async (req, res) => {
+  if (!schedulerAccount(req, res)) return;
+  const scheduleId = String(req.params.scheduleId || "");
+  if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
+  try {
+    const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
+    res.json(result);
+  } catch (err) {
+    res.status(Number(err.status) || 502).json({ error: err.message || "Could not load schedule status." });
+  }
+});
+app.post("/api/pinterest/affiliate-schedules/:scheduleId/activate", async (req, res) => {
+  if (!schedulerAccount(req, res)) return;
+  const scheduleId = String(req.params.scheduleId || "");
+  if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
+  try {
+    const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}/activate`, { method: "POST", body: "{}" });
+    res.json(result);
+  } catch (err) {
+    res.status(Number(err.status) || 502).json({ error: err.message || "Could not activate schedule." });
+  }
+});
+app.post("/api/pinterest/affiliate-schedules/:scheduleId/pause", async (req, res) => {
+  if (!schedulerAccount(req, res)) return;
+  const scheduleId = String(req.params.scheduleId || "");
+  if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
+  try {
+    const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}/pause`, { method: "POST", body: "{}" });
+    res.json(result);
+  } catch (err) {
+    res.status(Number(err.status) || 502).json({ error: err.message || "Could not pause schedule." });
+  }
+});
+
 // ─── API error handling helper ───
 // ─── API error handling helper ───
 function handleApiError(status, res) {
