@@ -397,7 +397,7 @@ app.post("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(
  * Account identity is derived from the signed Hub bearer session, not request JSON.
  */
 async function affiliateSchedulerRequest(path, options = {}) {
-  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\\/+$/, "");
+  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\/+$/, "");
   const key = String(process.env.PINTEREST_AGENT_APP_API_KEY || "").trim();
   if (!base || !key) {
     const error = new Error("Affiliate scheduler is not configured on the Hub backend.");
