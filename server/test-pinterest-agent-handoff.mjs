@@ -80,7 +80,7 @@ globalThis.fetch = async (input, init = {}) => {
       return new Response(JSON.stringify({ schedule_id: 77, status: "draft", source_count: body.sources.length, jobs_created: 0, publishing_started: false }), { status: 201, headers: { "content-type": "application/json" } });
     }
     if (parsed.pathname === "/affiliate-scheduler/schedules/77" && (!init.method || init.method === "GET")) {
-      return new Response(JSON.stringify({ schedule_id: 77, status: "draft", source_count: 1, daily_pin_limit: 5, starts_on: "2026-11-05", ends_on: "2026-12-04", timezone: "America/New_York", job_counts: {} }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ schedule_id: 77, account_id: "pinterest:123456789", status: "draft", source_count: 1, daily_pin_limit: 5, starts_on: "2026-11-05", ends_on: "2026-12-04", timezone: "America/New_York", job_counts: {} }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (parsed.pathname === "/affiliate-scheduler/schedules/77/activate" || parsed.pathname === "/affiliate-scheduler/schedules/77/pause") {
       return new Response(JSON.stringify({ schedule_id: 77, status: parsed.pathname.endsWith("activate") ? "active" : "paused", jobs_created: 150 }), { status: 200, headers: { "content-type": "application/json" } });
@@ -243,7 +243,7 @@ try {
     method: "POST", headers: { Authorization: `Bearer ${completeBody.session_token}`, "Content-Type": "application/json" }, body: "{}",
   });
   assert.equal(schedulerPause.status, 200);
-  assert.equal(observed.schedulerRequests.length, 4);
+  assert.equal(observed.schedulerRequests.length, 6, "status ownership must be checked before activate and pause");
   assert.equal(observed.publishRequests.length, 0, "scheduler proxy tests must not call any Pin publication route");
 
   // Hub Pin writes must use the Agent's canonical idempotent publication gateway.
