@@ -457,7 +457,7 @@ app.get("/api/pinterest/affiliate-schedules/:scheduleId", async (req, res) => {
   const accountId = schedulerAccount(req, res);
   if (!accountId) return;
   const scheduleId = String(req.params.scheduleId || "");
-  if (!/^\\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
+  if (!/^\d+$/.test(scheduleId)) return res.status(400).json({ error: "Invalid schedule ID." });
   try {
     const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
     if (result.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
