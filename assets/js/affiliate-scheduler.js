@@ -151,8 +151,11 @@
   document.getElementById("affiliate-refresh-schedule").addEventListener("click", refreshSchedule);
   var dateInput = document.getElementById("affiliate-schedule-start");
   if (dateInput) {
-    var now = new Date();
-    dateInput.value = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, "0"), String(now.getDate()).padStart(2, "0")].join("-");
+    var zone = document.getElementById("affiliate-schedule-timezone").value || "America/New_York";
+    var parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    var dateParts = {};
+    parts.forEach(function (part) { dateParts[part.type] = part.value; });
+    dateInput.value = dateParts.year + "-" + dateParts.month + "-" + dateParts.day;
   }
   addSource();
   if (activeScheduleId) refreshSchedule();
