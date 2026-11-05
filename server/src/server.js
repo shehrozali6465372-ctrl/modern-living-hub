@@ -64,7 +64,7 @@ function getApiBaseUrl() {
 
 // Required OAuth scopes for this demo
 const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write", "user_accounts:read"].join(",");
-const REQUIRED_SCOPES = SCOPES.split(",");
+// Persist only scopes actually returned by Pinterest; never infer a grant from the request.
 
 // ─── Middleware ───
 app.set("trust proxy", 1);
@@ -107,7 +107,7 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key");
   }
 
   if (req.method === "OPTIONS") {
@@ -184,14 +184,17 @@ async function agentRequest(path, options = {}) {
   const key = String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim();
   if (!base || !key) throw new Error("Pinterest Agent API is not configured.");
   const retryTransient = options.retryTransient === true;
+  const timeoutMs = Math.max(100, Math.min(300000,
+    Number(options.timeoutMs) || Number(process.env.PINTEREST_AGENT_REQUEST_TIMEOUT_MS) || 90000));
   const requestOptions = { ...options };
   delete requestOptions.retryTransient;
+  delete requestOptions.timeoutMs;
   let lastError;
   const delays = retryTransient ? [0, 5000, 10000, 15000, 20000, 25000] : [0];
   for (const delay of delays) {
     if (delay) await new Promise(resolve => setTimeout(resolve, delay));
     try {
-      const response = await fetch(`${base}${path}`, { ...requestOptions, headers: { "Content-Type": "application/json", "X-Credential-Ingest-Key": key, ...(options.headers || {}) }, signal: AbortSignal.timeout(15000) });
+      const response = await fetch(`${base}${path}`, { ...requestOptions, headers: { "Content-Type": "application/json", "X-Credential-Ingest-Key": key, ...(options.headers || {}) }, signal: AbortSignal.timeout(timeoutMs) });
       const body = await response.json().catch(() => ({}));
       if (response.ok) return body;
       if (retryTransient && [502, 503, 504].includes(response.status)) {
@@ -218,7 +221,9 @@ async function waitForPinterestAgentReady() {
   const retryDelayMs = Math.max(1, Number(process.env.PINTEREST_AGENT_READY_RETRY_MS) || 5000);
   const deadline = Date.now() + timeoutMs;
   let lastError;
+  let attempt = 0;
   while (Date.now() < deadline) {
+    let delayMs = retryDelayMs;
     try {
       const response = await fetch(`${base}/health`, {
         headers: { Accept: "application/json" },
@@ -227,26 +232,42 @@ async function waitForPinterestAgentReady() {
       const health = await response.json().catch(() => ({}));
       if (response.ok && health?.status === "ok") return;
       lastError = new Error(`Pinterest Agent health check HTTP ${response.status}`);
+      if (response.status === 429) {
+        // Honor Retry-After (seconds or HTTP date); otherwise back off exponentially.
+        const retryAfter = response.headers.get("retry-after");
+        const parsed = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter.trim())
+          ? Number(retryAfter.trim()) * 1000
+          : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN;
+        delayMs = Number.isFinite(parsed) && parsed >= 0
+          ? Math.max(250, parsed)
+          : Math.max(250, Math.round(Math.min(30000, retryDelayMs * (2 ** attempt)) * (0.5 + Math.random() * 0.5)));
+      } else if ([502, 503, 504].includes(response.status)) {
+        delayMs = Math.max(250, Math.round(Math.min(30000, retryDelayMs * (2 ** attempt)) * (0.5 + Math.random() * 0.5)));
+      } else {
+        break; // Client/auth/configuration errors will not heal by polling.
+      }
     } catch (err) {
       lastError = err;
+      delayMs = Math.max(250, Math.round(Math.min(30000, retryDelayMs * (2 ** attempt)) * (0.5 + Math.random() * 0.5)));
     }
-    if (Date.now() + retryDelayMs >= deadline) break;
-    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+    attempt += 1;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0 || delayMs >= remainingMs) break;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
   }
   const reason = String(lastError?.message || "health check timed out").slice(0, 160);
   throw new Error(`Pinterest Agent did not become healthy within ${Math.round(timeoutMs / 1000)} seconds (${reason}). Please retry Connect Pinterest when the Agent is healthy.`);
 }
 
 async function persistPinterestCredential(tokenData) {
-  // Render free instances may be asleep; wake and verify the Agent before sending OAuth credentials.
-  await waitForPinterestAgentReady();
+  // The OAuth callback already completed the Agent readiness preflight before consuming the one-time code.
   const user = await fetchPinterestUser(tokenData.access_token);
   const expiresAt = tokenData.expires_in ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString() : null;
   const accountId = `pinterest:${String(user.id)}`;
   const saved = await agentRequest("/integrations/pinterest/credentials", { retryTransient:true, method:"POST", body:JSON.stringify({
     account_id:accountId, pinterest_user_id:String(user.id), username:String(user.username || ""),
     access_token:String(tokenData.access_token), refresh_token:String(tokenData.refresh_token || ""),
-    token_type:String(tokenData.token_type || "bearer"), scope:String(tokenData.scope || SCOPES), expires_at:expiresAt,
+    token_type:String(tokenData.token_type || "bearer"), scope:String(tokenData.scope || ""), expires_at:expiresAt,
     refresh_token_expires_at:tokenData.refresh_token_expires_at ? new Date(Number(tokenData.refresh_token_expires_at)*1000).toISOString() : tokenData.refresh_token_expires_in ? new Date(Date.now()+Number(tokenData.refresh_token_expires_in)*1000).toISOString() : null
   })});
   if (saved?.stored !== true) throw new Error("Pinterest Agent did not confirm encrypted Neon credential storage.");
@@ -339,7 +360,76 @@ app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req)
 app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
 app.get("/api/pinterest/pins/list",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const pageSize=Number(req.query.page_size||100);if(!Number.isInteger(pageSize)||pageSize<1||pageSize>100)return res.status(400).json({error:"page_size must be between 1 and 100."});const payload={page_size:pageSize,include_protected_pins:true,include_product_tag_obj:true};if(req.query.bookmark){if(typeof req.query.bookmark!=="string"||req.query.bookmark.length>2000)return res.status(400).json({error:"Invalid bookmark."});payload.bookmark=req.query.bookmark;}try{const r=await pinterestOp(id,"list_pins",payload);res.json({pins:r.data?.items||[],bookmark:r.data?.bookmark||null,read_only:true});}catch(err){res.status(502).json({error:err?.message||"Could not list Pinterest Pins through Agent."});}});
 app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
-app.post("/api/pinterest/pins",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {board_id,title,description,image_url,destination_url}=req.body;if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});try{const r=await pinterestOp(id,"create_pin",{board_id:String(board_id),title:String(title),description:String(description||""),image_url:String(image_url),destination_url:String(destination_url)});const d=r.data||{};res.json({success:true,pin:{id:d.id,title:d.title,link:d.link,board_id:d.board_id,created_at:d.created_at}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected Pin request."});}});
+// Read-only analytics proxy: the browser never receives the Agent service key or Pinterest token.
+app.post("/api/pinterest/analytics/run",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const periodDays=Number(req.body?.period_days ?? 30);
+  if(!Number.isInteger(periodDays)||periodDays<1||periodDays>90)return res.status(400).json({error:"period_days must be between 1 and 90."});
+  try{
+    const result=await agentRequest("/integrations/pinterest/analytics/run",{method:"POST",timeoutMs:240000,body:JSON.stringify({account_id:id,period_days:periodDays})});
+    res.json(result);
+  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest engagement analytics."});}
+});
+app.get("/api/pinterest/ad-accounts",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  try{
+    const result=await agentRequest("/integrations/pinterest/ad-accounts",{method:"POST",timeoutMs:60000,body:JSON.stringify({account_id:id})});
+    res.json(result);
+  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load advertiser accounts."});}
+});
+app.post("/api/pinterest/trend-intelligence/run",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const requested=Array.isArray(req.body?.regions)?req.body.regions:["US","GB+IE"];
+  if(!requested.length||requested.length>2||requested.some(x=>!["US","GB+IE"].includes(x))||new Set(requested).size!==requested.length)return res.status(400).json({error:"Regions must be unique values from US and GB+IE."});
+  try{
+    const result=await agentRequest("/trend-intelligence/run",{method:"POST",timeoutMs:60000,body:JSON.stringify({account_id:id,regions:requested,limit:50})});
+    res.status(result.ok===false?409:200).json(result);
+  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest trend intelligence."});}
+});
+app.post("/api/pinterest/trend-visuals/run",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const requested=Array.isArray(req.body?.regions)?req.body.regions:["US","GB+IE"];
+  if(!requested.length||requested.length>2||requested.some(x=>!["US","GB+IE"].includes(x))||new Set(requested).size!==requested.length)return res.status(400).json({error:"Regions must be unique values from US and GB+IE."});
+  try{
+    const result=await agentRequest("/trend-visuals/run",{method:"POST",timeoutMs:60000,body:JSON.stringify({account_id:id,regions:requested})});
+    res.status(result.ok===false?409:200).json(result);
+  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest featured topics."});}
+});
+app.post("/api/pinterest/audience-insights",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const adAccountId=String(req.body?.ad_account_id||"");
+  if(!/^\d{1,18}$/.test(adAccountId))return res.status(400).json({error:"Select a valid Pinterest advertiser account."});
+  try{
+    const result=await agentRequest("/integrations/pinterest/audience-insights/run",{method:"POST",timeoutMs:90000,body:JSON.stringify({account_id:id,ad_account_id:adAccountId})});
+    res.status(result.ok===false?409:200).json(result);
+  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest audience insights."});}
+});
+app.post("/api/pinterest/pins",async(req,res)=>{
+  const id=getAccountId(req);
+  if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const {board_id,title,description,image_url,destination_url}=req.body||{};
+  if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});
+  const idempotencyKey=String(req.get("Idempotency-Key")||"");
+  if(!/^[A-Za-z0-9._:-]{8,200}$/.test(idempotencyKey))return res.status(400).json({error:"A valid Idempotency-Key header is required."});
+  try{
+    const result=await agentRequest("/integrations/pinterest/publish-manual",{
+      method:"POST",
+      timeoutMs:180000,
+      headers:{"Idempotency-Key":idempotencyKey},
+      body:JSON.stringify({
+        account_id:id,board_id:String(board_id),title:String(title),
+        description:String(description||""),image_url:String(image_url),
+        destination_url:String(destination_url)
+      })
+    });
+    res.json({success:true,pin:{
+      id:result.pin_id,title:String(title),link:String(destination_url),
+      board_id:result.board_id,already_published:Boolean(result.already_published)
+    }});
+  }catch(err){
+    res.status(err?.status||502).json({error:err?.message||"Pinterest publication could not be confirmed."});
+  }
+});
 app.get("/api/pinterest/pins/:pinId/product-tags",async(req,res)=>{
   const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
   try{const r=await pinterestOp(id,"product_tags",{pin_id:String(req.params.pinId)});res.json({pin_id:String(req.params.pinId),product_tags:r.data?.product_tags||[],read_only:true});}

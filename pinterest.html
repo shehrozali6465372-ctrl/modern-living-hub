@@ -123,6 +123,39 @@
                     <button type="button" class="btn btn-secondary" id="load-more-pins-btn" style="display:none; margin-top:1rem;">Load More Pins</button>
                 </div>
 
+                <!-- Organic engagement analytics remain available; advertiser insights are deferred to Model 2. -->
+                <div class="pinterest-card-section" id="pinterest-analytics-section">
+                    <h3>Organic Pinterest Engagement Analytics</h3>
+                    <p>Read-only organic Pin engagement reporting. Advertiser accounts and Audience Insights are deferred to Model 2 and are not requested by Model 1.</p>
+                    <button type="button" class="btn btn-primary" id="load-engagement-analytics-btn">Load Engagement Analytics</button>
+                    <p id="analytics-status" role="status" aria-live="polite" style="margin-top:0.75rem;"></p>
+                    <div id="engagement-analytics-results" aria-live="polite"></div>
+                </div>
+
+                <!-- Live Pinterest Trends API discovery; read-only -->
+                <div class="pinterest-card-section" id="pinterest-trend-intelligence-section">
+                    <h3>Pinterest Trend Intelligence</h3>
+                    <p>Fetches today's real Pinterest growing search keywords for the US and Great Britain &amp; Ireland. Results include Pinterest-reported weekly, monthly and yearly search growth. This is read-only and never publishes Pins.</p>
+                    <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
+                        <label><input type="checkbox" id="trend-region-us" checked> USA</label>
+                        <label><input type="checkbox" id="trend-region-gb" checked> UK / Great Britain &amp; Ireland</label>
+                        <button type="button" class="btn btn-primary" id="load-pinterest-trends-btn">Fetch Live Pinterest Trends</button>
+                    </div>
+                    <p id="trend-intelligence-status" role="status" aria-live="polite" style="margin-top:0.75rem;"></p>
+                    <div id="trend-intelligence-results" aria-live="polite"></div>
+                    <p>Important: Pinterest's API provides up to 50 current-day trends per request, not historical API queries. Saved daily snapshots build history from the day this feature is enabled. Search growth is not proof of Amazon sales or conversion demand. Visual-style analysis requires real Pin image samples and is not claimed by this keyword feed.</p>
+                </div>
+
+                <!-- Featured Pinterest topics and sample Pin imagery; read-only -->
+                <div class="pinterest-card-section" id="pinterest-featured-topics-section">
+                    <h3>Featured Topics &amp; Pin Visual Samples</h3>
+                    <p>Loads Pinterest's official featured topics, related searches/interests, and example Pin image metadata. Images are examples only; no Pins are published.</p>
+                    <button type="button" class="btn btn-primary" id="load-featured-topics-btn">Fetch Featured Topics &amp; Images</button>
+                    <p id="featured-topics-status" role="status" aria-live="polite" style="margin-top:0.75rem;"></p>
+                    <div id="featured-topics-results" aria-live="polite"></div>
+                    <p>Note: Pinterest supplies the sample images and dominant-color metadata. AI visual classification (style, palette, composition) is not yet performed.</p>
+                </div>
+
                 <!-- Tag products on an existing Pin -->
                 <div class="pinterest-card-section">
                     <h3>Tag Products on an Existing Pin</h3>
