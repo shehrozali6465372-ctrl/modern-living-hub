@@ -21,6 +21,9 @@ process.env.PINTEREST_AGENT_READY_RETRY_MS = "1";
 const localBase = `http://127.0.0.1:${process.env.PORT}`;
 const agentBase = process.env.PINTEREST_AGENT_API_URL;
 const realFetch = globalThis.fetch;
+const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
+const observedTimeouts = [];
+AbortSignal.timeout = (milliseconds) => { observedTimeouts.push(milliseconds); return realAbortSignalTimeout(milliseconds); };
 const observed = { credentialRequests: [], operations: [], refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, schedulerRequests: [] };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
@@ -141,6 +144,14 @@ let exitCode = 0;
 try {
   await import("./src/server.js");
   await waitForLocalServer();
+
+  // Browser preflight must permit the Idempotency-Key header required by the canonical gateway.
+  const idempotencyPreflight = await realFetch(localBase + "/api/pinterest/pins", {
+    method: "OPTIONS",
+    headers: { Origin: process.env.FRONTEND_URL, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,authorization,idempotency-key" },
+  });
+  assert.equal(idempotencyPreflight.status, 204);
+  assert.match(idempotencyPreflight.headers.get("access-control-allow-headers") || "", /Idempotency-Key/i);
 
   // Agent outage must be detected before exchanging Pinterest's single-use code.
   observed.agentHealthy = false;

@@ -386,6 +386,232 @@
         disconnectBtnOnPage.addEventListener('click', disconnectPinterest);
     }
 
+    // ─── Pinterest Trend Intelligence (official read-only Trends API) ───
+    var trendButton = document.getElementById('load-pinterest-trends-btn');
+    var trendStatus = document.getElementById('trend-intelligence-status');
+    var trendResults = document.getElementById('trend-intelligence-results');
+    function renderPinterestTrends(payload) {
+        if (!trendResults) return;
+        trendResults.replaceChildren();
+        (payload.regions || []).forEach(function (region) {
+            var section = document.createElement('section');
+            var heading = document.createElement('h4');
+            heading.textContent = region.region_name + ' — growing search terms';
+            section.appendChild(heading);
+            var list = document.createElement('ol');
+            (region.trends || []).forEach(function (trend) {
+                var item = document.createElement('li');
+                item.style.cssText = 'padding:0.65rem 0;border-bottom:1px solid var(--color-border);';
+                var name = document.createElement('strong');
+                name.textContent = trend.keyword;
+                var growth = document.createElement('p');
+                growth.style.margin = '0.2rem 0 0';
+                function pct(value) { return value === null || value === undefined ? 'Not reported' : (Number(value) > 10000 ? '>10,000%' : Number(value).toLocaleString() + '%'); }
+                growth.textContent = 'WoW: ' + pct(trend.growth_week_over_week_pct) + ' · MoM: ' + pct(trend.growth_month_over_month_pct) + ' · YoY: ' + pct(trend.growth_year_over_year_pct);
+                item.append(name, growth);
+                list.appendChild(item);
+            });
+            section.appendChild(list);
+            trendResults.appendChild(section);
+        });
+        var stamp = document.createElement('p');
+        stamp.textContent = 'Source: ' + payload.source + ' · Fetched: ' + payload.fetched_at + ' · Trend type: ' + payload.trend_type;
+        trendResults.appendChild(stamp);
+    }
+    async function loadPinterestTrends() {
+        if (!isBackendConfigured()) return;
+        var regions = [];
+        if (document.getElementById('trend-region-us')?.checked) regions.push('US');
+        if (document.getElementById('trend-region-gb')?.checked) regions.push('GB+IE');
+        if (!regions.length) { if (trendStatus) trendStatus.textContent = 'Select at least one market.'; return; }
+        if (trendButton) trendButton.disabled = true;
+        if (trendStatus) trendStatus.textContent = 'Requesting current Pinterest Trends data…';
+        try {
+            var response = await fetch(BACKEND + '/api/pinterest/trend-intelligence/run', {
+                method: 'POST', credentials: 'include',
+                headers: authHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ regions: regions })
+            });
+            var data = await response.json().catch(function () { return {}; });
+            if (!response.ok || data.ok === false) {
+                if (data.requires_scope) throw new Error('Reconnect Pinterest and approve ' + data.requires_scope + '.');
+                throw new Error(data.note || data.error || 'Pinterest trends unavailable.');
+            }
+            renderPinterestTrends(data);
+            if (trendStatus) trendStatus.textContent = 'Loaded real Pinterest trend records for ' + (data.regions || []).length + ' market(s).';
+        } catch (error) {
+            if (trendStatus) trendStatus.textContent = error.message || 'Could not load Pinterest trends.';
+        } finally {
+            if (trendButton) trendButton.disabled = false;
+        }
+    }
+    if (trendButton) trendButton.addEventListener('click', loadPinterestTrends);
+
+    // ─── Pinterest Featured Topics + sample Pin visuals (read-only) ───
+    var featuredButton = document.getElementById('load-featured-topics-btn');
+    var featuredStatus = document.getElementById('featured-topics-status');
+    var featuredResults = document.getElementById('featured-topics-results');
+    function renderFeaturedTopics(payload) {
+        if (!featuredResults) return;
+        featuredResults.replaceChildren();
+        (payload.regions || []).forEach(function (market) {
+            var section = document.createElement('section');
+            var heading = document.createElement('h4');
+            heading.textContent = market.region_name + ' — featured topics';
+            section.appendChild(heading);
+            (market.topics || []).forEach(function (topic) {
+                var card = document.createElement('article');
+                card.style.cssText = 'padding:0.85rem 0;border-bottom:1px solid var(--color-border);';
+                var title = document.createElement('h5');
+                title.textContent = topic.title || 'Untitled topic';
+                card.appendChild(title);
+                if (topic.description) { var desc = document.createElement('p'); desc.textContent = topic.description; card.appendChild(desc); }
+                if (topic.growth_month_over_month_pct !== null && topic.growth_month_over_month_pct !== undefined) {
+                    var growth = document.createElement('p');
+                    growth.textContent = 'Month-over-month growth: ' + Number(topic.growth_month_over_month_pct).toLocaleString() + '%';
+                    card.appendChild(growth);
+                }
+                [['Related searches', topic.related_searches], ['Related interests', topic.related_interests]].forEach(function (pair) {
+                    if (!Array.isArray(pair[1]) || !pair[1].length) return;
+                    var p = document.createElement('p');
+                    p.textContent = pair[0] + ': ' + pair[1].join(', ');
+                    card.appendChild(p);
+                });
+                var samples = Array.isArray(topic.example_pins) ? topic.example_pins : [];
+                if (samples.length) {
+                    var gallery = document.createElement('div');
+                    gallery.style.cssText = 'display:flex;gap:0.75rem;flex-wrap:wrap;';
+                    samples.forEach(function (sample) {
+                        try {
+                            var url = new URL(sample.image_url);
+                            if (url.protocol !== 'https:' || (url.hostname !== 'i.pinimg.com' && !url.hostname.endsWith('.i.pinimg.com'))) return;
+                            var figure = document.createElement('figure');
+                            figure.style.cssText = 'margin:0;width:130px;';
+                            var img = document.createElement('img');
+                            img.src = url.href; img.alt = 'Pinterest example Pin for ' + (topic.title || 'featured topic');
+                            img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
+                            img.style.cssText = 'width:100%;height:auto;max-height:190px;object-fit:cover;border-radius:8px;';
+                            figure.appendChild(img);
+                            var caption = document.createElement('figcaption');
+                            caption.style.cssText = 'font-size:0.78rem;color:var(--color-text-light);';
+                            caption.textContent = (sample.width || '?') + ' × ' + (sample.height || '?') +
+                                (sample.dominant_color ? ' · ' + sample.dominant_color : '');
+                            figure.appendChild(caption); gallery.appendChild(figure);
+                        } catch (_) { /* Ignore malformed image URLs. */ }
+                    });
+                    card.appendChild(gallery);
+                }
+                section.appendChild(card);
+            });
+            featuredResults.appendChild(section);
+        });
+        var stamp = document.createElement('p');
+        stamp.textContent = 'Source: ' + payload.source + ' · Fetched: ' + payload.fetched_at + ' · Read-only';
+        featuredResults.appendChild(stamp);
+    }
+    async function loadFeaturedTopics() {
+        if (!isBackendConfigured()) return;
+        var regions = [];
+        if (document.getElementById('trend-region-us')?.checked) regions.push('US');
+        if (document.getElementById('trend-region-gb')?.checked) regions.push('GB+IE');
+        if (!regions.length) { if (featuredStatus) featuredStatus.textContent = 'Select at least one market above.'; return; }
+        if (featuredButton) featuredButton.disabled = true;
+        if (featuredStatus) featuredStatus.textContent = 'Fetching Pinterest featured topics and sample images…';
+        try {
+            var response = await fetch(BACKEND + '/api/pinterest/trend-visuals/run', {
+                method: 'POST', credentials: 'include',
+                headers: authHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ regions: regions })
+            });
+            var data = await response.json().catch(function () { return {}; });
+            if (!response.ok || data.ok === false) {
+                if (data.requires_scope) throw new Error('Reconnect Pinterest and approve ' + data.requires_scope + '.');
+                throw new Error(data.note || data.error || 'Featured topics unavailable.');
+            }
+            renderFeaturedTopics(data);
+            if (featuredStatus) featuredStatus.textContent = 'Loaded real featured topics for ' + (data.regions || []).length + ' market(s).';
+        } catch (error) {
+            if (featuredStatus) featuredStatus.textContent = error.message || 'Could not load featured topics.';
+        } finally {
+            if (featuredButton) featuredButton.disabled = false;
+        }
+    }
+    if (featuredButton) featuredButton.addEventListener('click', loadFeaturedTopics);
+
+
+    var analyticsStatus = document.getElementById('analytics-status');
+    var engagementResults = document.getElementById('engagement-analytics-results');
+    var loadEngagementBtn = document.getElementById('load-engagement-analytics-btn');
+
+    function setAnalyticsStatus(message, isError) {
+        if (!analyticsStatus) return;
+        analyticsStatus.textContent = message;
+        analyticsStatus.style.color = isError ? 'var(--color-error)' : 'var(--color-text-light)';
+    }
+
+    function renderMetricList(target, heading, metrics) {
+        if (!target) return;
+        var title = document.createElement('h4');
+        title.textContent = heading;
+        var list = document.createElement('dl');
+        list.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0.75rem;';
+        Object.keys(metrics || {}).forEach(function (key) {
+            var wrap = document.createElement('div');
+            wrap.style.cssText = 'padding:0.75rem;border:1px solid var(--color-border);border-radius:8px;';
+            var label = document.createElement('dt');
+            label.textContent = key.replace(/_/g, ' ');
+            label.style.cssText = 'text-transform:capitalize;font-size:0.85rem;color:var(--color-text-light);';
+            var value = document.createElement('dd');
+            var raw = metrics[key];
+            value.textContent = raw === null || raw === undefined ? 'Not available' :
+                (key.indexOf('rate') >= 0 ? (Number(raw) * 100).toFixed(2) + '%' : Number(raw).toLocaleString());
+            value.style.cssText = 'font-weight:700;font-size:1.25rem;margin:0.25rem 0 0;';
+            wrap.appendChild(label);
+            wrap.appendChild(value);
+            list.appendChild(wrap);
+        });
+        target.replaceChildren(title, list);
+    }
+
+
+    async function loadEngagementAnalytics() {
+        if (!isBackendConfigured()) return;
+        if (loadEngagementBtn) loadEngagementBtn.disabled = true;
+        setAnalyticsStatus('Loading organic Pin engagement from Pinterest…', false);
+        try {
+            var res = await fetch(BACKEND + '/api/pinterest/analytics/run', {
+                method: 'POST', credentials: 'include',
+                headers: authHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ period_days: 30 })
+            });
+            var data = await res.json().catch(function () { return {}; });
+            if (!res.ok) throw new Error(data.error || data.detail || 'Engagement analytics could not be loaded.');
+            renderMetricList(engagementResults, 'Organic engagement — last 30 days', data.aggregate_metrics || {});
+            var pinsChecked = Number.isFinite(Number(data.pins_checked)) ? Number(data.pins_checked) : 0;
+            var snapshotsSaved = Number.isFinite(Number(data.snapshots_saved)) ? Number(data.snapshots_saved) : 0;
+            if (data.ok === false) {
+                var pinResults = Array.isArray(data.pin_results) ? data.pin_results : [];
+                var failedPins = pinResults.length === pinsChecked
+                    ? pinResults.filter(function (pin) { return pin && pin.ok === false; }).length
+                    : Math.max(0, pinsChecked - snapshotsSaved);
+                setAnalyticsStatus(
+                    'Partial analytics result: ' + snapshotsSaved + ' of ' + pinsChecked +
+                    ' published Pins saved; ' + failedPins + ' failed. Available metrics are shown above. Retry later for failed Pins. Predictive ML is not trained.',
+                    true
+                );
+            } else {
+                setAnalyticsStatus(snapshotsSaved + ' Pin analytics snapshots saved for ' + pinsChecked + ' published Pins. Predictive ML is not trained.', false);
+            }
+        } catch (err) {
+            setAnalyticsStatus(err.message || 'Engagement analytics could not be loaded.', true);
+        } finally {
+            if (loadEngagementBtn) loadEngagementBtn.disabled = false;
+        }
+    }
+
+
+    if (loadEngagementBtn) loadEngagementBtn.addEventListener('click', loadEngagementAnalytics);
+
     // ─── Helpers ───
     function showError(el, msg) {
         if (!el) return;

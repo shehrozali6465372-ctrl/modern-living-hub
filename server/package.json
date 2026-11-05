@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test:pinterest-agent-handoff": "node test-pinterest-agent-handoff.mjs",
-    "test": "npm run test:pinterest-agent-handoff"
+    "test": "npm run test:pinterest-agent-handoff && npm run test:pinterest-analytics-ui",
+    "test:pinterest-analytics-ui": "node test-pinterest-analytics-ui.mjs"
   },
   "engines": {
     "node": ">=18"

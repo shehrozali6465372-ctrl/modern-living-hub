@@ -107,7 +107,7 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key");
   }
 
   if (req.method === "OPTIONS") {
@@ -186,7 +186,7 @@ async function agentRequest(path, options = {}) {
   const retryTransient = options.retryTransient === true;
   const requestOptions = { ...options };
   delete requestOptions.retryTransient;
-  const timeoutMs = Number(requestOptions.timeoutMs) > 0 ? Number(requestOptions.timeoutMs) : 15000;
+  const timeoutMs = Math.max(100, Math.min(300000, Number(requestOptions.timeoutMs) || Number(process.env.PINTEREST_AGENT_REQUEST_TIMEOUT_MS) || 90000));
   delete requestOptions.timeoutMs;
   let lastError;
   const delays = retryTransient ? [0, 5000, 10000, 15000, 20000, 25000] : [0];
@@ -363,6 +363,34 @@ app.post("/api/pinterest/complete",(req,res,next)=>{
 },async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
 app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);if(id){try{await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true});});
 app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
+// Read-only analytics proxy: the browser never receives the Agent service key or Pinterest token.
+app.post("/api/pinterest/analytics/run",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const periodDays=Number(req.body?.period_days ?? 30);
+  if(!Number.isInteger(periodDays)||periodDays<1||periodDays>90)return res.status(400).json({error:"period_days must be between 1 and 90."});
+  try{
+    const result=await agentRequest("/integrations/pinterest/analytics/run",{method:"POST",timeoutMs:240000,body:JSON.stringify({account_id:id,period_days:periodDays})});
+    res.json(result);
+  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest engagement analytics."});}
+});
+app.post("/api/pinterest/trend-intelligence/run",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const requested=Array.isArray(req.body?.regions)?req.body.regions:["US","GB+IE"];
+  if(!requested.length||requested.length>2||requested.some(x=>!["US","GB+IE"].includes(x))||new Set(requested).size!==requested.length)return res.status(400).json({error:"Regions must be unique values from US and GB+IE."});
+  try{
+    const result=await agentRequest("/trend-intelligence/run",{method:"POST",timeoutMs:60000,body:JSON.stringify({account_id:id,regions:requested,limit:50})});
+    res.status(result.ok===false?409:200).json(result);
+  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest trend intelligence."});}
+});
+app.post("/api/pinterest/trend-visuals/run",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const requested=Array.isArray(req.body?.regions)?req.body.regions:["US","GB+IE"];
+  if(!requested.length||requested.length>2||requested.some(x=>!["US","GB+IE"].includes(x))||new Set(requested).size!==requested.length)return res.status(400).json({error:"Regions must be unique values from US and GB+IE."});
+  try{
+    const result=await agentRequest("/trend-visuals/run",{method:"POST",timeoutMs:60000,body:JSON.stringify({account_id:id,regions:requested})});
+    res.status(result.ok===false?409:200).json(result);
+  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest featured topics."});}
+});
 app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
 app.post("/api/pinterest/pins",async(req,res)=>{
   const id=getAccountId(req);
@@ -372,7 +400,7 @@ app.post("/api/pinterest/pins",async(req,res)=>{
   const {board_id,title,description,alt_text,image_url,destination_url}=req.body||{};
   if(!board_id||!title||!alt_text||!image_url||!destination_url)return res.status(400).json({error:"Board, title, alt text, image URL, and destination URL are required."});
   const payload={account_id:id,board_id:String(board_id),title:String(title),description:String(description||""),alt_text:String(alt_text),image_url:String(image_url),destination_url:String(destination_url)};
-  const publish=()=>agentRequest("/workflow/publish-hub-pin",{method:"POST",body:JSON.stringify(payload),headers:{"Idempotency-Key":idempotencyKey},timeoutMs:60000});
+  const publish=()=>agentRequest("/workflow/publish-hub-pin",{method:"POST",body:JSON.stringify(payload),headers:{"Idempotency-Key":idempotencyKey},timeoutMs:180000});
   try{
     let result;
     try{
