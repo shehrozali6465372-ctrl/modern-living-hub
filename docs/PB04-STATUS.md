@@ -37,7 +37,7 @@
 
 - User decision: defer Pinterest ads:read, advertiser accounts, and Audience Insights to Model 2. Do not request ads:read during Model 1 OAuth, trigger reconnect/consent, generate developer test tokens, or reset app credentials.
 - Hub local OAuth scope list is limited to boards:read, boards:write, pins:read, pins:write, and user_accounts:read. Pinterest's actual returned scope remains the source of truth and is persisted without inference.
-- Model 1 UI retains organic engagement analytics only; advertiser and audience controls are removed and explicitly labeled as Model 2 scope. Server-side advertiser/audience routes remain in source but are not surfaced in the Model 1 UI.
+- Model 1 UI retains organic engagement analytics only; advertiser and audience controls/routes are not exposed in the Hub. Ads:read remains deferred to Model 2.
 - Local Hub tests and JS syntax checks pass; Agent suite passes 106 tests, 5 skipped. Changes remain local/uncommitted; no push, merge, deployment, OAuth reconnect, token refresh, DB write, Pin, or board creation occurred.
 - This scope boundary does not alter PB-04's prior credential-custody closure; it records the user's product-scope decision for Model 1.
 
@@ -85,3 +85,11 @@
 - Manual Pin path requires Hub session authentication, forwards Idempotency-Key through CORS, and calls Agent /integrations/pinterest/publish-manual. Agent validates stored account identity and board ownership, persists draft/idempotency fingerprint, then uses the unified publication gateway. The generic operation create_pin bypass is removed.
 - OAuth scope request remains limited to boards:read, boards:write, pins:read, pins:write, user_accounts:read. Pinterest-returned scope is persisted without inference; ads:read remains deferred to Model 2. No OAuth reconnect/refresh or real Pin/Board write was performed.
 - Changes remain local/uncommitted. No exact-current-code CI result, push, PR, merge, or deployment. Agent production schema still lacks migrations 011/012; explicit release approval and production compatibility verification are required.
+
+## 2026-11-05 — Hub feature branch reconciled with current main
+- User approved treating current `main` as authoritative for the legacy Product Tag UI/API. The branch no longer reintroduces Existing Pins/Product Tag UI or product-tag routes; those are intentionally omitted.
+- Reconciled the feature branch with latest `main`, retaining its affiliate scheduler UI/backend and canonical `/workflow/publish-hub-pin` gateway. Organic engagement analytics and read-only Trends/Featured Topics UI and proxy routes were ported on top of that current base.
+- Hub Agent request timeout is configurable and bounded (default 90 s, maximum 300 s); explicit budgets are 180 s for manual publish, 240 s for organic analytics, and 60 s for Trends/Featured Topics. CORS explicitly allows `Idempotency-Key`.
+- Removed Model 2 advertiser/audience routes and UI from the active Hub implementation. OAuth scope remains unchanged; no ads:read consent or reconnect was initiated.
+- Verification after reconciliation: `npm test` PASS (mocked OAuth/Agent handoff and static analytics/trends contract); Node syntax checks PASS; `git diff --check` PASS; fresh `npm audit --audit-level=moderate` reports 0 vulnerabilities. No live Pinterest provider calls, Pin/Board creation, OAuth refresh, or production deployment occurred.
+- This reconciliation is on the Hub feature branch only. PR remains draft and is not merged to `main`; no Pages deployment was triggered.

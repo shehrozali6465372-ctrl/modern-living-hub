@@ -64,7 +64,7 @@ function getApiBaseUrl() {
 
 // Required OAuth scopes for this demo
 const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write", "user_accounts:read"].join(",");
-// Persist only scopes actually returned by Pinterest; never infer a grant from the request.
+const REQUIRED_SCOPES = SCOPES.split(",");
 
 // ─── Middleware ───
 app.set("trust proxy", 1);
@@ -166,12 +166,12 @@ function readSessionToken(token) {
   }
 }
 function getAccountId(req) {
+  // Pinterest account mutations and reads require the explicit bearer token
+  // returned by the one-time OAuth handoff. Do not authenticate API calls from
+  // an automatically attached cross-site session cookie (CSRF fallback).
   const h = req.headers.authorization;
-  if (h && h.startsWith("Bearer ")) {
-    const accountId = readSessionToken(h.slice(7));
-    if (accountId) return accountId;
-  }
-  return req.session?.pinterestAccountId || null;
+  if (!h || !h.startsWith("Bearer ")) return null;
+  return readSessionToken(h.slice(7));
 }
 async function fetchPinterestUser(accessToken) {
   const response = await fetch(`${PINTEREST_API_BASE}/user_account`, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -184,10 +184,9 @@ async function agentRequest(path, options = {}) {
   const key = String(process.env.PINTEREST_AGENT_INGEST_KEY || "").trim();
   if (!base || !key) throw new Error("Pinterest Agent API is not configured.");
   const retryTransient = options.retryTransient === true;
-  const timeoutMs = Math.max(100, Math.min(300000,
-    Number(options.timeoutMs) || Number(process.env.PINTEREST_AGENT_REQUEST_TIMEOUT_MS) || 90000));
   const requestOptions = { ...options };
   delete requestOptions.retryTransient;
+  const timeoutMs = Math.max(100, Math.min(300000, Number(requestOptions.timeoutMs) || Number(process.env.PINTEREST_AGENT_REQUEST_TIMEOUT_MS) || 90000));
   delete requestOptions.timeoutMs;
   let lastError;
   const delays = retryTransient ? [0, 5000, 10000, 15000, 20000, 25000] : [0];
@@ -267,7 +266,7 @@ async function persistPinterestCredential(tokenData) {
   const saved = await agentRequest("/integrations/pinterest/credentials", { retryTransient:true, method:"POST", body:JSON.stringify({
     account_id:accountId, pinterest_user_id:String(user.id), username:String(user.username || ""),
     access_token:String(tokenData.access_token), refresh_token:String(tokenData.refresh_token || ""),
-    token_type:String(tokenData.token_type || "bearer"), scope:String(tokenData.scope || ""), expires_at:expiresAt,
+    token_type:String(tokenData.token_type || "bearer"), scope:String(tokenData.scope || SCOPES), expires_at:expiresAt,
     refresh_token_expires_at:tokenData.refresh_token_expires_at ? new Date(Number(tokenData.refresh_token_expires_at)*1000).toISOString() : tokenData.refresh_token_expires_in ? new Date(Date.now()+Number(tokenData.refresh_token_expires_in)*1000).toISOString() : null
   })});
   if (saved?.stored !== true) throw new Error("Pinterest Agent did not confirm encrypted Neon credential storage.");
@@ -333,7 +332,7 @@ app.get("/auth/pinterest/callback", async (req,res) => {
   }
 });
 async function pinterestOp(accountId,operation,payload={}) {
-  const retryTransient = ["account","boards","list_pins"].includes(operation);
+  const retryTransient = ["account","boards"].includes(operation);
   const request = () => agentRequest("/integrations/pinterest/operation",{
     retryTransient, method:"POST", body:JSON.stringify({account_id:accountId,operation,payload})
   });
@@ -355,11 +354,15 @@ async function pinterestOp(accountId,operation,payload={}) {
   }
 }
 app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch{res.json({connected:false,needs_reauth:true});}});
-app.post("/api/pinterest/complete",async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
+app.post("/api/pinterest/complete",(req,res,next)=>{
+  const origin = req.get("origin");
+  if (!origin || !allowedOrigins.includes(origin)) {
+    return res.status(403).json({ error: "Origin not allowed for OAuth handoff completion." });
+  }
+  next();
+},async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
 app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);if(id){try{await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true});});
 app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
-app.get("/api/pinterest/pins/list",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const pageSize=Number(req.query.page_size||100);if(!Number.isInteger(pageSize)||pageSize<1||pageSize>100)return res.status(400).json({error:"page_size must be between 1 and 100."});const payload={page_size:pageSize,include_protected_pins:true,include_product_tag_obj:true};if(req.query.bookmark){if(typeof req.query.bookmark!=="string"||req.query.bookmark.length>2000)return res.status(400).json({error:"Invalid bookmark."});payload.bookmark=req.query.bookmark;}try{const r=await pinterestOp(id,"list_pins",payload);res.json({pins:r.data?.items||[],bookmark:r.data?.bookmark||null,read_only:true});}catch(err){res.status(502).json({error:err?.message||"Could not list Pinterest Pins through Agent."});}});
-app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
 // Read-only analytics proxy: the browser never receives the Agent service key or Pinterest token.
 app.post("/api/pinterest/analytics/run",async(req,res)=>{
   const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
@@ -369,13 +372,6 @@ app.post("/api/pinterest/analytics/run",async(req,res)=>{
     const result=await agentRequest("/integrations/pinterest/analytics/run",{method:"POST",timeoutMs:240000,body:JSON.stringify({account_id:id,period_days:periodDays})});
     res.json(result);
   }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest engagement analytics."});}
-});
-app.get("/api/pinterest/ad-accounts",async(req,res)=>{
-  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
-  try{
-    const result=await agentRequest("/integrations/pinterest/ad-accounts",{method:"POST",timeoutMs:60000,body:JSON.stringify({account_id:id})});
-    res.json(result);
-  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load advertiser accounts."});}
 });
 app.post("/api/pinterest/trend-intelligence/run",async(req,res)=>{
   const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
@@ -395,100 +391,138 @@ app.post("/api/pinterest/trend-visuals/run",async(req,res)=>{
     res.status(result.ok===false?409:200).json(result);
   }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest featured topics."});}
 });
-app.post("/api/pinterest/audience-insights",async(req,res)=>{
-  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
-  const adAccountId=String(req.body?.ad_account_id||"");
-  if(!/^\d{1,18}$/.test(adAccountId))return res.status(400).json({error:"Select a valid Pinterest advertiser account."});
-  try{
-    const result=await agentRequest("/integrations/pinterest/audience-insights/run",{method:"POST",timeoutMs:90000,body:JSON.stringify({account_id:id,ad_account_id:adAccountId})});
-    res.status(result.ok===false?409:200).json(result);
-  }catch(err){res.status(err?.status||502).json({error:err?.message||"Could not load Pinterest audience insights."});}
-});
+app.get("/api/pinterest/account",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"account");const d=r.data||{};res.json({connected:true,id:d.id||null,username:d.username||null,display_name:d.display_name||null,profile_image:d.profile_image||null,website_url:d.website_url||null});}catch{return res.status(401).json({error:"Pinterest credential invalid or expired; reconnect."});}});
 app.post("/api/pinterest/pins",async(req,res)=>{
   const id=getAccountId(req);
   if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
-  const {board_id,title,description,image_url,destination_url}=req.body||{};
-  if(!board_id||!title||!image_url||!destination_url)return res.status(400).json({error:"Board, title, image URL, and destination URL are required."});
-  const idempotencyKey=String(req.get("Idempotency-Key")||"");
-  if(!/^[A-Za-z0-9._:-]{8,200}$/.test(idempotencyKey))return res.status(400).json({error:"A valid Idempotency-Key header is required."});
+  const idempotencyKey=String(req.get("Idempotency-Key")||"").trim();
+  if(idempotencyKey.length<8||idempotencyKey.length>200)return res.status(400).json({error:"A valid Idempotency-Key header is required."});
+  const {board_id,title,description,alt_text,image_url,destination_url}=req.body||{};
+  if(!board_id||!title||!alt_text||!image_url||!destination_url)return res.status(400).json({error:"Board, title, alt text, image URL, and destination URL are required."});
+  const payload={account_id:id,board_id:String(board_id),title:String(title),description:String(description||""),alt_text:String(alt_text),image_url:String(image_url),destination_url:String(destination_url)};
+  const publish=()=>agentRequest("/workflow/publish-hub-pin",{method:"POST",body:JSON.stringify(payload),headers:{"Idempotency-Key":idempotencyKey},timeoutMs:180000});
   try{
-    const result=await agentRequest("/integrations/pinterest/publish-manual",{
-      method:"POST",
-      timeoutMs:180000,
-      headers:{"Idempotency-Key":idempotencyKey},
-      body:JSON.stringify({
-        account_id:id,board_id:String(board_id),title:String(title),
-        description:String(description||""),image_url:String(image_url),
-        destination_url:String(destination_url)
-      })
-    });
-    res.json({success:true,pin:{
-      id:result.pin_id,title:String(title),link:String(destination_url),
-      board_id:result.board_id,already_published:Boolean(result.already_published)
-    }});
+    let result;
+    try{
+      result=await publish();
+    }catch(err){
+      // Agent returns this specific 401 only when Pinterest rejected the stored
+      // access token during the read-only preflight, before any Pin write.
+      if(err?.status!==401||!String(err?.message||"").includes("Pinterest API rejected the operation (HTTP 401)"))throw err;
+      await agentRequest("/integrations/pinterest/refresh",{method:"POST",body:JSON.stringify({account_id:id,client_id:CLIENT_ID,client_secret:CLIENT_SECRET})});
+      result=await publish();
+    }
+    res.json({success:true,pin:{id:result.pin_id,title:result.title,link:result.affiliate_url,board_id:result.board_id}});
   }catch(err){
-    res.status(err?.status||502).json({error:err?.message||"Pinterest publication could not be confirmed."});
+    const status=Number(err?.status)||502;
+    res.status(status).json({error:err?.message||"Pinterest publication failed.",outcome_unknown:status===502,idempotency_key:idempotencyKey});
   }
 });
-app.get("/api/pinterest/pins/:pinId/product-tags",async(req,res)=>{
-  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
-  try{const r=await pinterestOp(id,"product_tags",{pin_id:String(req.params.pinId)});res.json({pin_id:String(req.params.pinId),product_tags:r.data?.product_tags||[],read_only:true});}
-  catch(err){res.status(err?.status||502).json({error:err?.message||"Could not read Pinterest product tags."});}
-});
-app.post("/api/pinterest/pins/:pinId/product-tags",async(req,res)=>{
-  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
-  const productPinIds=req.body?.product_pin_ids;
-  if(!Array.isArray(productPinIds)||productPinIds.length<1||productPinIds.length>24||productPinIds.some(x=>typeof x!=="string"||!x.trim())||new Set(productPinIds).size!==productPinIds.length)return res.status(400).json({error:"Provide 1–24 unique, nonblank existing Pinterest product Pin IDs."});
-  try{
-    const pinId=String(req.params.pinId);
-    if(productPinIds.map(x=>x.trim()).includes(pinId)) {
-      return res.status(400).json({error:"The hero Pin cannot also be used as a Product Pin tag."});
-    }
-
-    // Server-side eligibility check: never trust manually entered IDs or UI filtering.
-    // Pinterest marks eligible catalog/product Pins with is_product=true.
-    const requestedIds=new Set(productPinIds.map(x=>x.trim()));
-    const eligibleIds=new Set();
-    let bookmark=null;
-    const seenBookmarks=new Set();
-    for(let page=0;page<100;page++) {
-      const payload={page_size:100,include_protected_pins:true,include_product_tag_obj:true};
-      if(bookmark) payload.bookmark=bookmark;
-      const pageResult=await pinterestOp(id,"list_pins",payload);
-      const items=Array.isArray(pageResult.data?.items)?pageResult.data.items:[];
-      for(const pin of items) {
-        if(requestedIds.has(String(pin.id)) && pin.is_product===true) eligibleIds.add(String(pin.id));
-      }
-      if(eligibleIds.size===requestedIds.size) break;
-      const nextBookmark=pageResult.data?.bookmark||null;
-      if(!nextBookmark) break;
-      if(seenBookmarks.has(nextBookmark)) throw new Error("Pinterest Pin pagination repeated a bookmark; Product Pin eligibility could not be fully verified.");
-      seenBookmarks.add(nextBookmark);
-      bookmark=nextBookmark;
-    }
-    if(eligibleIds.size!==requestedIds.size && bookmark) {
-      return res.status(503).json({error:"Pinterest Pin listing exceeded the safe pagination limit. Product Pin eligibility could not be fully verified; no tags were changed."});
-    }
-    const invalidProductPinIds=[...requestedIds].filter(pinId=>!eligibleIds.has(pinId));
-    if(invalidProductPinIds.length) {
-      return res.status(422).json({
-        error:"Every tag target must be an existing Pinterest Pin with is_product=true. Standard Pins, unknown IDs, and retailer URLs are rejected.",
-        invalid_product_pin_ids:invalidProductPinIds
-      });
-    }
-
-    const before=await pinterestOp(id,"product_tags",{pin_id:pinId});
-    const existing=new Set((before.data?.product_tags||[]).map(x=>String(x.pin_id)));
-    const missing=productPinIds.map(x=>x.trim()).filter(x=>!existing.has(x));
-    if(missing.length)await pinterestOp(id,"add_product_tags",{pin_id:pinId,product_pin_ids:missing});
-    const after=await pinterestOp(id,"product_tags",{pin_id:pinId});
-    const verified=new Set((after.data?.product_tags||[]).map(x=>String(x.pin_id)));
-    const notVerified=productPinIds.map(x=>x.trim()).filter(x=>!verified.has(x));
-    if(notVerified.length)return res.status(502).json({error:"Tag write may have completed, but read-back did not confirm all tags. Inspect current tags before retrying.",missing_product_pin_ids:notVerified});
-    return res.json({success:true,pin_id:pinId,newly_attached:missing,already_attached:productPinIds.map(x=>x.trim()).filter(x=>existing.has(x)),verified_product_pin_ids:productPinIds.map(x=>x.trim())});
-  }catch(err){return res.status(err?.status||502).json({error:err?.message||"Pinterest product tagging failed. Read current tags before retrying."});}
-});
 app.post("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {name,description}=req.body;if(!name)return res.status(400).json({error:"Board name is required."});try{const r=await pinterestOp(id,"create_board",{name:String(name),description:String(description||"")});const d=r.data||{};res.json({success:true,board:{id:d.id,name:d.name,description:d.description}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected board request."});}});
+
+/**
+ * Affiliate URL scheduler proxy. The browser never receives the Agent APP_API_KEY.
+ * Account identity is derived from the signed Hub bearer session, not request JSON.
+ */
+async function affiliateSchedulerRequest(path, options = {}) {
+  const base = String(process.env.PINTEREST_AGENT_API_URL || "").trim().replace(/\/+$/, "");
+  const key = String(process.env.PINTEREST_AGENT_APP_API_KEY || "").trim();
+  if (!base || !key) {
+    const error = new Error("Affiliate scheduler is not configured on the Hub backend.");
+    error.status = 503;
+    throw error;
+  }
+  const response = await fetch(`${base}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": key,
+      ...(options.headers || {}),
+    },
+    signal: AbortSignal.timeout(60000),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(String(data.detail || data.error || `Affiliate scheduler HTTP ${response.status}`).slice(0, 240));
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+function schedulerAccount(req, res) {
+  const accountId = getAccountId(req);
+  if (!accountId) {
+    res.status(401).json({ error: "Not connected to Pinterest." });
+    return null;
+  }
+  return accountId;
+}
+app.post("/api/pinterest/affiliate-schedules", async (req, res) => {
+  const accountId = schedulerAccount(req, res);
+  if (!accountId) return;
+  const body = req.body || {};
+  const payload = {
+    account_id: accountId,
+    timezone: body.timezone,
+    starts_on: body.starts_on,
+    days: body.days,
+    daily_pin_limit: body.daily_pin_limit,
+    board_name: body.board_name,
+    board_description: body.board_description,
+    sources: body.sources,
+  };
+  try {
+    const result = await affiliateSchedulerRequest("/affiliate-scheduler/schedules", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(Number(err.status) || 502).json({ error: err.message || "Could not create affiliate schedule draft." });
+  }
+});
+app.get("/api/pinterest/affiliate-schedules/:scheduleId", async (req, res) => {
+  const accountId = schedulerAccount(req, res);
+  if (!accountId) return;
+  const scheduleId = String(req.params.scheduleId || "");
+  if (!Number.isSafeInteger(Number(scheduleId)) || Number(scheduleId) <= 0) return res.status(400).json({ error: "Invalid schedule ID." });
+  try {
+    const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
+    if (result.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
+    res.json(result);
+  } catch (err) {
+    res.status(Number(err.status) || 502).json({ error: err.message || "Could not load schedule status." });
+  }
+});
+app.post("/api/pinterest/affiliate-schedules/:scheduleId/activate", async (req, res) => {
+  const accountId = schedulerAccount(req, res);
+  if (!accountId) return;
+  const scheduleId = String(req.params.scheduleId || "");
+  if (!Number.isSafeInteger(Number(scheduleId)) || Number(scheduleId) <= 0) return res.status(400).json({ error: "Invalid schedule ID." });
+  try {
+    const current = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
+    if (current.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
+    const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}/activate`, { method: "POST", body: "{}" });
+    res.json(result);
+  } catch (err) {
+    res.status(Number(err.status) || 502).json({ error: err.message || "Could not activate schedule." });
+  }
+});
+app.post("/api/pinterest/affiliate-schedules/:scheduleId/pause", async (req, res) => {
+  const accountId = schedulerAccount(req, res);
+  if (!accountId) return;
+  const scheduleId = String(req.params.scheduleId || "");
+  if (!Number.isSafeInteger(Number(scheduleId)) || Number(scheduleId) <= 0) return res.status(400).json({ error: "Invalid schedule ID." });
+  try {
+    const current = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}`);
+    if (current.account_id !== accountId) return res.status(404).json({ error: "Schedule not found." });
+    const result = await affiliateSchedulerRequest(`/affiliate-scheduler/schedules/${scheduleId}/pause`, { method: "POST", body: "{}" });
+    res.json(result);
+  } catch (err) {
+    res.status(Number(err.status) || 502).json({ error: err.message || "Could not pause schedule." });
+  }
+});
+
 // ─── API error handling helper ───
 // ─── API error handling helper ───
 function handleApiError(status, res) {

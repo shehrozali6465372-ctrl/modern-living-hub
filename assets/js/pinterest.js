@@ -180,7 +180,6 @@
         if (connectedState) connectedState.style.display = 'block';
         if (disconnectedState) disconnectedState.style.display = 'none';
         loadBoards();
-        loadAdvertiserAccounts();
     }
 
     function showDisconnectedUI() {
@@ -283,11 +282,11 @@
         });
     }
 
+    // Keep the same key when the user retries an uncertain submission.
+    var pendingPinIdempotencyKey = null;
+
     // ─── Create Pin ───
     if (createPinForm) {
-        // Reuse one key for identical retries from this form; never mint a new
-        // key while the same payload may already be in flight or uncertain.
-        var pendingManualPinRequest = null;
         createPinForm.addEventListener('submit', async function (e) {
             e.preventDefault();
             if (!isBackendConfigured()) {
@@ -301,6 +300,7 @@
             var imageUrl = document.getElementById('pin-image-url').value.trim();
             var title = document.getElementById('pin-title').value.trim();
             var description = document.getElementById('pin-description').value.trim();
+            var altText = document.getElementById('pin-alt-text').value.trim();
             var destinationUrl = document.getElementById('pin-destination-url').value.trim();
 
             if (!boardId) {
@@ -308,203 +308,50 @@
                 pinResult.style.color = 'var(--color-error)';
                 return;
             }
-            if (!imageUrl || !title || !destinationUrl) {
-                pinResult.textContent = '❌ Image URL, title, and destination URL are required.';
+            if (!imageUrl || !title || !altText || !destinationUrl) {
+                pinResult.textContent = '❌ Image URL, title, alt text, and destination URL are required.';
                 pinResult.style.color = 'var(--color-error)';
                 return;
             }
 
-            var pinPayload = {
-                board_id: boardId,
-                title: title,
-                description: description,
-                image_url: imageUrl,
-                destination_url: destinationUrl
-            };
-            var pinFingerprint = JSON.stringify(pinPayload);
-            if (!pendingManualPinRequest || pendingManualPinRequest.fingerprint !== pinFingerprint) {
-                var newKey = (window.crypto && typeof window.crypto.randomUUID === 'function')
+            if (!pendingPinIdempotencyKey) {
+                pendingPinIdempotencyKey = (window.crypto && window.crypto.randomUUID)
                     ? window.crypto.randomUUID()
-                    : Array.from(window.crypto.getRandomValues(new Uint8Array(16))).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
-                pendingManualPinRequest = { fingerprint: pinFingerprint, key: newKey };
+                    : 'mlh-' + Date.now() + '-' + Math.random().toString(16).slice(2);
             }
-
-            pinResult.textContent = 'Submitting through secure publication gateway…';
+            pinResult.textContent = 'Publishing pin…';
             pinResult.style.color = 'var(--color-text-light)';
 
             try {
                 var res = await fetch(BACKEND + '/api/pinterest/pins', {
                     method: 'POST',
-                    headers: authHeaders({ 'Content-Type': 'application/json', 'Idempotency-Key': pendingManualPinRequest.key }),
+                    headers: authHeaders({ 'Content-Type': 'application/json', 'Idempotency-Key': pendingPinIdempotencyKey }),
                     credentials: 'include',
-                    body: JSON.stringify(pinPayload)
+                    body: JSON.stringify({
+                        board_id: boardId,
+                        title: title,
+                        description: description,
+                        alt_text: altText,
+                        image_url: imageUrl,
+                        destination_url: destinationUrl
+                    })
                 });
                 var data = await res.json();
                 if (!res.ok) {
-                    pinResult.textContent = '❌ ' + (data.error || 'Failed to create pin.');
+                    pinResult.textContent = data.outcome_unknown
+                        ? '⚠️ Publish outcome is uncertain. Do not create a new request key; check the Pinterest board and publication record first. ' + (data.error || '')
+                        : '❌ ' + (data.error || 'Failed to create pin.');
                     pinResult.style.color = 'var(--color-error)';
                     return;
                 }
                 pinResult.innerHTML = '✅ Pin published successfully! Pin ID: <strong>' + escapeHtml(data.pin.id) + '</strong>';
                 pinResult.style.color = 'var(--color-success)';
-                pendingManualPinRequest = null;
+                pendingPinIdempotencyKey = null;
                 createPinForm.reset();
                 loadBoards();
             } catch {
-                pinResult.textContent = '❌ Could not reach the server. Please try again.';
+                pinResult.textContent = '⚠️ Network outcome is uncertain. Do not submit a new request; verify the Pinterest board before retrying with the same key.';
                 pinResult.style.color = 'var(--color-error)';
-            }
-        });
-    }
-
-    // ─── Read-only listing of existing Pinterest Pins ───
-    var loadPinsBtn = document.getElementById('load-pins-btn');
-    var loadMorePinsBtn = document.getElementById('load-more-pins-btn');
-    var pinsListStatus = document.getElementById('pins-list-status');
-    var existingPinsList = document.getElementById('existing-pins-list');
-    var pinsBookmark = null;
-    var pinsLoaded = false;
-    var eligibleProductPinCount = 0;
-    var productPinDiscoveryStatus = document.getElementById('product-pin-discovery-status');
-
-    function appendPinCard(pin) {
-        var card = document.createElement('article');
-        card.className = 'pinterest-card';
-        card.style.marginTop = '0.75rem';
-        var heading = document.createElement('h4');
-        heading.textContent = pin.title || 'Untitled Pin';
-        var id = document.createElement('p');
-        id.textContent = 'Pin ID: ' + String(pin.id || 'Unavailable');
-        var description = document.createElement('p');
-        description.textContent = pin.description || '';
-        var board = document.createElement('p');
-        board.textContent = 'Board ID: ' + String(pin.board_id || 'Unavailable');
-        var productStatus = document.createElement('p');
-        productStatus.textContent = pin.is_product === true ? 'Pinterest type: Eligible Product Pin' : 'Pinterest type: Standard / non-product Pin';
-        card.appendChild(heading);
-        card.appendChild(id);
-        card.appendChild(productStatus);
-        if (description.textContent) card.appendChild(description);
-        card.appendChild(board);
-        if (pin.is_product === true) {
-            eligibleProductPinCount += 1;
-            var selectProduct = document.createElement('button');
-            selectProduct.type = 'button';
-            selectProduct.className = 'btn btn-secondary';
-            selectProduct.textContent = 'Use as Product Tag';
-            selectProduct.addEventListener('click', function () {
-                var field = document.getElementById('product-pin-ids');
-                if (!field) return;
-                var ids = field.value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
-                if (!ids.includes(String(pin.id))) ids.push(String(pin.id));
-                field.value = ids.join(', ');
-            });
-            card.appendChild(selectProduct);
-        } else {
-            var selectHero = document.createElement('button');
-            selectHero.type = 'button';
-            selectHero.className = 'btn btn-secondary';
-            selectHero.textContent = 'Use as Hero Pin';
-            selectHero.addEventListener('click', function () {
-                var field = document.getElementById('hero-pin-id');
-                if (field) field.value = String(pin.id || '');
-            });
-            card.appendChild(selectHero);
-        }
-        if (pin.link) {
-            var link = document.createElement('a');
-            link.href = pin.link;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = 'Open Pin on Pinterest';
-            card.appendChild(link);
-        }
-        existingPinsList.appendChild(card);
-    }
-
-    async function loadExistingPins(append) {
-        if (!isBackendConfigured() || !existingPinsList || !pinsListStatus) return;
-        if (!append) {
-            pinsBookmark = null;
-            eligibleProductPinCount = 0;
-            existingPinsList.replaceChildren();
-            pinsLoaded = false;
-        }
-        pinsListStatus.textContent = 'Loading existing Pins…';
-        if (loadPinsBtn) loadPinsBtn.disabled = true;
-        if (loadMorePinsBtn) loadMorePinsBtn.disabled = true;
-        try {
-            var query = '?page_size=50';
-            if (append && pinsBookmark) query += '&bookmark=' + encodeURIComponent(pinsBookmark);
-            var res = await fetch(BACKEND + '/api/pinterest/pins/list' + query, {
-                method: 'GET', credentials: 'include', headers: authHeaders()
-            });
-            var data = await res.json().catch(function () { return {}; });
-            if (!res.ok) {
-                pinsListStatus.textContent = res.status === 401
-                    ? 'Session authentication failed. Refresh this page or reconnect Pinterest.'
-                    : (data.error || 'Could not load Pinterest Pins.');
-                if (loadMorePinsBtn) loadMorePinsBtn.style.display = 'none';
-                return;
-            }
-            var pins = Array.isArray(data.pins) ? data.pins : [];
-            pins.forEach(appendPinCard);
-            pinsBookmark = data.bookmark || null;
-            pinsLoaded = true;
-            pinsListStatus.textContent = pins.length
-                ? 'Loaded ' + pins.length + ' Pin(s).' + (pinsBookmark ? ' More Pins are available.' : ' End of list.')
-                : (append ? 'No additional Pins found.' : 'No Pins found for this account.');
-            if (productPinDiscoveryStatus) {
-                productPinDiscoveryStatus.textContent = eligibleProductPinCount
-                    ? 'Found ' + eligibleProductPinCount + ' eligible Product Pin(s) on the pages loaded. Use “Use as Product Tag” to select them.'
-                    : (pinsBookmark
-                        ? 'No eligible Product Pins on the pages loaded yet. Load more Pins or create a Product Pin in Pinterest using the product-page link, then reload.'
-                        : 'No eligible Product Pins found in this account listing. Create a Product Pin in Pinterest using the product-page link, then reload this list.');
-            }
-            if (loadMorePinsBtn) loadMorePinsBtn.style.display = pinsBookmark ? 'inline-block' : 'none';
-        } catch (err) {
-            pinsListStatus.textContent = 'Could not reach the Hub API. Please retry.';
-        } finally {
-            if (loadPinsBtn) loadPinsBtn.disabled = false;
-            if (loadMorePinsBtn) loadMorePinsBtn.disabled = false;
-        }
-    }
-
-    if (loadPinsBtn) loadPinsBtn.addEventListener('click', function () { loadExistingPins(false); });
-    if (loadMorePinsBtn) loadMorePinsBtn.addEventListener('click', function () { if (pinsLoaded && pinsBookmark) loadExistingPins(true); });
-
-    // ─── Attach native Pinterest product tags to an existing hero Pin ───
-    var productTagsForm = document.getElementById("product-tags-form");
-    var productTagsResult = document.getElementById("product-tags-result");
-    if (productTagsForm) {
-        productTagsForm.addEventListener("submit", async function (e) {
-            e.preventDefault();
-            var heroPinId = document.getElementById("hero-pin-id").value.trim();
-            var productPinIds = document.getElementById("product-pin-ids").value.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
-            if (!heroPinId || productPinIds.length < 1 || productPinIds.length > 24 || new Set(productPinIds).size !== productPinIds.length) {
-                productTagsResult.textContent = "❌ Enter one hero Pin ID and 1–24 unique product Pin IDs.";
-                productTagsResult.style.color = "var(--color-error)";
-                return;
-            }
-            productTagsResult.textContent = "Checking existing tags and attaching missing product tags…";
-            productTagsResult.style.color = "var(--color-text-light)";
-            try {
-                var res = await fetch(BACKEND + "/api/pinterest/pins/" + encodeURIComponent(heroPinId) + "/product-tags", {
-                    method: "POST", credentials: "include",
-                    headers: authHeaders({ "Content-Type": "application/json" }),
-                    body: JSON.stringify({ product_pin_ids: productPinIds })
-                });
-                var data = await res.json();
-                if (!res.ok) {
-                    productTagsResult.textContent = "❌ " + (data.error || "Product tags could not be verified. Inspect current tags before retrying.");
-                    productTagsResult.style.color = "var(--color-error)";
-                    return;
-                }
-                productTagsResult.textContent = "✅ Verified " + data.verified_product_pin_ids.length + " product tag(s) on hero Pin " + data.pin_id + ". Newly attached: " + data.newly_attached.length + "; already present: " + data.already_attached.length + ".";
-                productTagsResult.style.color = "var(--color-success)";
-            } catch (err) {
-                productTagsResult.textContent = "❌ Request outcome may be uncertain. Read current product tags before retrying.";
-                productTagsResult.style.color = "var(--color-error)";
             }
         });
     }
@@ -691,14 +538,10 @@
     }
     if (featuredButton) featuredButton.addEventListener('click', loadFeaturedTopics);
 
-    // ─── Audience & Engagement Analytics (read-only reporting) ───
+
     var analyticsStatus = document.getElementById('analytics-status');
     var engagementResults = document.getElementById('engagement-analytics-results');
-    var audienceResults = document.getElementById('audience-insights-results');
     var loadEngagementBtn = document.getElementById('load-engagement-analytics-btn');
-    var loadAudienceBtn = document.getElementById('load-audience-insights-btn');
-    var advertiserSelect = document.getElementById('audience-ad-account-select');
-    var reconnectAdsLink = document.getElementById('reconnect-ads-link');
 
     function setAnalyticsStatus(message, isError) {
         if (!analyticsStatus) return;
@@ -730,40 +573,6 @@
         target.replaceChildren(title, list);
     }
 
-    async function loadAdvertiserAccounts() {
-        if (!advertiserSelect || !isBackendConfigured()) return;
-        try {
-            var res = await fetch(BACKEND + '/api/pinterest/ad-accounts', {
-                credentials: 'include', headers: authHeaders()
-            });
-            var data = await res.json().catch(function () { return {}; });
-            if (!res.ok || data.ok === false || data.requires_scope) {
-                advertiserSelect.innerHTML = '<option value="">Advertiser access unavailable</option>';
-                if (loadAudienceBtn) loadAudienceBtn.disabled = true;
-                if (data.requires_scope && reconnectAdsLink) {
-                    reconnectAdsLink.href = BACKEND + '/auth/pinterest?prompt=consent';
-                    reconnectAdsLink.style.display = 'inline';
-                }
-                setAnalyticsStatus(data.note || data.error || 'Pinterest advertiser access is unavailable for this account.', true);
-                return;
-            }
-            if (reconnectAdsLink) reconnectAdsLink.style.display = 'none';
-            var accounts = Array.isArray(data.ad_accounts) ? data.ad_accounts : [];
-            advertiserSelect.innerHTML = '<option value="">Select advertiser account</option>';
-            accounts.forEach(function (account) {
-                var option = document.createElement('option');
-                option.value = account.id;
-                option.textContent = (account.name || 'Pinterest advertiser') + ' (' + account.id + ')';
-                advertiserSelect.appendChild(option);
-            });
-            if (loadAudienceBtn) loadAudienceBtn.disabled = accounts.length === 0;
-            if (!accounts.length) setAnalyticsStatus('No advertiser accounts are available for this Pinterest login. Verify Business Access.', true);
-        } catch {
-            advertiserSelect.innerHTML = '<option value="">Could not load advertiser accounts</option>';
-            if (loadAudienceBtn) loadAudienceBtn.disabled = true;
-            setAnalyticsStatus('Could not reach Pinterest advertiser account reporting.', true);
-        }
-    }
 
     async function loadEngagementAnalytics() {
         if (!isBackendConfigured()) return;
@@ -800,102 +609,8 @@
         }
     }
 
-    function renderAudienceBreakdown(target, audience) {
-        if (!target) return;
-        var root = document.createElement('section');
-        root.style.cssText = 'display:grid;gap:1rem;margin-top:1rem;';
-        var title = document.createElement('h4');
-        title.textContent = audience.audience_insight_type === 'YOUR_TOTAL_AUDIENCE' ? 'Your Total Audience' : 'Your Engaged Audience';
-        root.appendChild(title);
-        var breakdown = audience.breakdown || {};
-        if (breakdown.audience_size !== null && breakdown.audience_size !== undefined) {
-            var size = document.createElement('p');
-            size.textContent = 'Estimated audience size: ' + Number(breakdown.audience_size).toLocaleString() +
-                (breakdown.size_is_upper_bound ? ' (rounded upper bound)' : '');
-            root.appendChild(size);
-        }
-        [
-            ['countries', 'Countries'],
-            ['cities_or_metros', 'Top cities / metro areas'],
-            ['age_groups', 'Age groups'],
-            ['gender', 'Gender'],
-            ['devices', 'Devices / Pinterest access'],
-            ['interests', 'Interests']
-        ].forEach(function (entry) {
-            var items = breakdown[entry[0]];
-            if (!Array.isArray(items) || !items.length) return;
-            var section = document.createElement('div');
-            var heading = document.createElement('h5');
-            heading.textContent = entry[1];
-            section.appendChild(heading);
-            items.forEach(function (item) {
-                var line = document.createElement('div');
-                line.style.cssText = 'display:grid;grid-template-columns:minmax(110px,1fr) minmax(80px,2fr) 54px;gap:0.5rem;align-items:center;margin:0.4rem 0;';
-                var label = document.createElement('span');
-                label.textContent = item.name;
-                var track = document.createElement('span');
-                track.style.cssText = 'height:9px;border-radius:8px;background:var(--color-border);overflow:hidden;';
-                var fill = document.createElement('span');
-                fill.style.cssText = 'display:block;height:100%;border-radius:8px;background:var(--color-primary,#6b7280);width:' +
-                    (item.percentage === null ? 0 : Math.min(100, Math.max(0, item.percentage))) + '%;';
-                track.appendChild(fill);
-                var value = document.createElement('strong');
-                value.style.textAlign = 'right';
-                value.textContent = item.percentage === null ? '—' : item.percentage.toFixed(1) + '%';
-                line.append(label, track, value);
-                section.appendChild(line);
-            });
-            root.appendChild(section);
-        });
-        [
-            breakdown.location_note,
-            breakdown.age_note,
-            breakdown.gender_note,
-            breakdown.device_note
-        ].filter(Boolean).forEach(function (message) {
-            var note = document.createElement('p');
-            note.style.cssText = 'font-size:0.85rem;color:var(--color-text-light);';
-            note.textContent = message;
-            root.appendChild(note);
-        });
-        target.appendChild(root);
-    }
-
-    async function loadAudienceInsights() {
-        var adAccountId = advertiserSelect && advertiserSelect.value;
-        if (!adAccountId) {
-            setAnalyticsStatus('Select a Pinterest advertiser account first.', true);
-            return;
-        }
-        if (loadAudienceBtn) loadAudienceBtn.disabled = true;
-        setAnalyticsStatus('Loading aggregated 30-day audience insights…', false);
-        try {
-            var res = await fetch(BACKEND + '/api/pinterest/audience-insights', {
-                method: 'POST', credentials: 'include',
-                headers: authHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ ad_account_id: adAccountId })
-            });
-            var data = await res.json().catch(function () { return {}; });
-            if (!res.ok || data.ok === false) throw new Error(data.note || data.error || 'Audience insights could not be loaded.');
-            if (audienceResults) {
-                audienceResults.replaceChildren();
-                (data.audience_insights || []).forEach(function (audience) {
-                    renderAudienceBreakdown(audienceResults, audience);
-                });
-            }
-            setAnalyticsStatus((data.snapshots_saved || 0) + ' aggregated audience insight snapshots saved. Pinterest audience insights use a fixed rolling 30-day window.', false);
-        } catch (err) {
-            setAnalyticsStatus(err.message || 'Audience insights could not be loaded.', true);
-        } finally {
-            if (loadAudienceBtn) loadAudienceBtn.disabled = !advertiserSelect || !advertiserSelect.value;
-        }
-    }
 
     if (loadEngagementBtn) loadEngagementBtn.addEventListener('click', loadEngagementAnalytics);
-    if (loadAudienceBtn) loadAudienceBtn.addEventListener('click', loadAudienceInsights);
-    if (advertiserSelect) advertiserSelect.addEventListener('change', function () {
-        if (loadAudienceBtn) loadAudienceBtn.disabled = !advertiserSelect.value;
-    });
 
     // ─── Helpers ───
     function showError(el, msg) {

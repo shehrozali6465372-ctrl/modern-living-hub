@@ -82,6 +82,57 @@
                     </form>
                 </div>
 
+                <!-- Affiliate Product URL Manager -->
+                <div class="pinterest-card-section" id="affiliate-scheduler-section">
+                    <h3>Affiliate Product URL Manager</h3>
+                    <p>Add 1–10 affiliate products once, then create a draft schedule. Draft creation does not publish Pins.</p>
+                    <form id="affiliate-scheduler-form" class="pinterest-form">
+                        <div class="form-group">
+                            <label for="affiliate-schedule-start">Start date</label>
+                            <input type="date" id="affiliate-schedule-start" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-timezone">Posting timezone (IANA)</label>
+                            <input type="text" id="affiliate-schedule-timezone" value="America/New_York" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-days">Schedule duration (days)</label>
+                            <input type="number" id="affiliate-schedule-days" min="1" max="30" value="30" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-daily-limit">Maximum Pins per day</label>
+                            <select id="affiliate-schedule-daily-limit">
+                                <option value="5" selected>5 Pins/day</option>
+                                <option value="4">4 Pins/day</option>
+                                <option value="3">3 Pins/day</option>
+                                <option value="2">2 Pins/day</option>
+                                <option value="1">1 Pin/day</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-board">Pinterest board name</label>
+                            <input type="text" id="affiliate-schedule-board" maxlength="100" value="Modern Living Hub | Kitchen &amp; Home Organization" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="affiliate-schedule-board-description">Board description</label>
+                            <input type="text" id="affiliate-schedule-board-description" maxlength="500" value="Kitchen organization, practical home finds, and home decor inspiration.">
+                        </div>
+                        <h4>Product sources</h4>
+                        <div id="affiliate-scheduler-sources"></div>
+                        <button type="button" class="btn btn-secondary" id="affiliate-add-source">Add another product (max 10)</button>
+                        <button type="submit" class="btn btn-primary" id="affiliate-create-draft">Save schedule as draft</button>
+                        <p id="affiliate-scheduler-result" role="status" aria-live="polite"></p>
+                    </form>
+                    <div id="affiliate-schedule-controls" style="display:none; margin-top:1.5rem;">
+                        <h4>Schedule status</h4>
+                        <p id="affiliate-schedule-status" role="status" aria-live="polite"></p>
+                        <button type="button" class="btn btn-primary" id="affiliate-activate-schedule">Activate schedule</button>
+                        <button type="button" class="btn btn-secondary" id="affiliate-pause-schedule">Pause schedule</button>
+                        <button type="button" class="btn btn-secondary" id="affiliate-refresh-schedule">Refresh status</button>
+                        <p><small>Activation queues jobs. The background worker may publish Pins when jobs become due. Pause cancels queued jobs; an in-flight Pin may still finish.</small></p>
+                    </div>
+                </div>
+
                 <!-- Select Board / Create Pin -->
                 <div class="pinterest-card-section">
                     <h3>Create Pinterest Pin</h3>
@@ -105,22 +156,16 @@
                             <textarea id="pin-description" name="description" placeholder="Pin description" rows="4"></textarea>
                         </div>
                         <div class="form-group">
+                            <label for="pin-alt-text">Image Alt Text</label>
+                            <textarea id="pin-alt-text" name="alt_text" placeholder="Describe only what is visible in the image" rows="3" required></textarea>
+                        </div>
+                        <div class="form-group">
                             <label for="pin-destination-url">Destination URL</label>
                             <input type="url" id="pin-destination-url" name="destination_url" placeholder="https://your-site.com/article" required>
                         </div>
                         <button type="submit" class="btn btn-primary" id="publish-pin-btn">Publish to Pinterest</button>
                         <p id="pin-result" style="margin-top:0.75rem;"></p>
                     </form>
-                </div>
-
-                <!-- Read-only list of existing Pinterest Pins -->
-                <div class="pinterest-card-section" id="existing-pins-section">
-                    <h3>Existing Pinterest Pins</h3>
-                    <p>Read-only view of Pins already published to your Pinterest account. This section never creates or edits Pins.</p>
-                    <button type="button" class="btn btn-primary" id="load-pins-btn">Load Existing Pins</button>
-                    <p id="pins-list-status" role="status" aria-live="polite" style="margin-top:0.75rem;"></p>
-                    <div id="existing-pins-list" aria-live="polite"></div>
-                    <button type="button" class="btn btn-secondary" id="load-more-pins-btn" style="display:none; margin-top:1rem;">Load More Pins</button>
                 </div>
 
                 <!-- Organic engagement analytics remain available; advertiser insights are deferred to Model 2. -->
@@ -156,25 +201,6 @@
                     <p>Note: Pinterest supplies the sample images and dominant-color metadata. AI visual classification (style, palette, composition) is not yet performed.</p>
                 </div>
 
-                <!-- Tag products on an existing Pin -->
-                <div class="pinterest-card-section">
-                    <h3>Tag Products on an Existing Pin</h3>
-                    <p>Only Pins marked as Product Pin by Pinterest can be tagged. Standard Pins and retailer URLs are not valid product Pin IDs.</p>
-                    <p id="product-pin-discovery-status" role="status" aria-live="polite">Load Existing Pins to discover eligible Product Pins. If none exist, create one in Pinterest using the product-page link, then reload this list.</p>
-                    <p><a href="https://help.pinterest.com/en/business/article/tag-your-products-in-your-pins" target="_blank" rel="noopener noreferrer">Pinterest instructions: create a Product Pin from a product link</a></p>
-                    <form id="product-tags-form" class="pinterest-form">
-                        <div class="form-group">
-                            <label for="hero-pin-id">Hero Pin ID</label>
-                            <input type="text" id="hero-pin-id" name="hero_pin_id" placeholder="Pinterest Pin ID to receive tags" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="product-pin-ids">Product Pin IDs (comma-separated, up to 24)</label>
-                            <textarea id="product-pin-ids" name="product_pin_ids" placeholder="Product Pin ID 1, Product Pin ID 2" rows="3" required></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Attach Product Tags</button>
-                        <p id="product-tags-result" style="margin-top:0.75rem;"></p>
-                    </form>
-                </div>
             </div>
         </div>
     </main>
@@ -238,5 +264,6 @@
       }
     </script>
     <script src="assets/js/pinterest.js" defer></script>
+    <script src="assets/js/affiliate-scheduler.js" defer></script>
 </body>
 </html>
