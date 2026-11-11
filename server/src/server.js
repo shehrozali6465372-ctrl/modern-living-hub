@@ -331,10 +331,11 @@ app.get("/auth/pinterest/callback", async (req,res) => {
     res.redirect(`${FRONTEND_URL}/pinterest.html?pinterest_error=${encodeURIComponent(err?.message||"Pinterest authentication failed.")}`);
   }
 });
-async function pinterestOp(accountId,operation,payload={}) {
+async function pinterestOp(accountId,operation,payload={},options={}) {
   const retryTransient = ["account","boards"].includes(operation);
+  const headers = options.idempotencyKey ? {"Idempotency-Key":options.idempotencyKey} : undefined;
   const request = () => agentRequest("/integrations/pinterest/operation",{
-    retryTransient, method:"POST", body:JSON.stringify({account_id:accountId,operation,payload})
+    retryTransient, method:"POST", body:JSON.stringify({account_id:accountId,operation,payload}), headers
   });
   try {
     return await request();
@@ -353,7 +354,11 @@ async function pinterestOp(accountId,operation,payload={}) {
     return request();
   }
 }
-app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch{res.json({connected:false,needs_reauth:true});}});
+app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch(err){
+  const refreshUncertain = err?.status === 409 && /outcome is uncertain|still in progress|automatic retry is blocked/i.test(String(err?.message||""));
+  if(refreshUncertain)return res.json({connected:false,needs_reauth:true,refresh_outcome_uncertain:true,message:"Pinterest refresh outcome is uncertain. Do not retry refresh; reconnect Pinterest or verify the account first."});
+  res.json({connected:false,needs_reauth:true});
+}});
 app.post("/api/pinterest/complete",(req,res,next)=>{
   const origin = req.get("origin");
   if (!origin || !allowedOrigins.includes(origin)) {
@@ -361,7 +366,7 @@ app.post("/api/pinterest/complete",(req,res,next)=>{
   }
   next();
 },async(req,res)=>{const {handoff}=req.body;if(!handoff||typeof handoff!=="string")return res.status(400).json({error:"Missing handoff code."});const e=consumeHandoff(handoff);if(!e)return res.status(400).json({error:"Invalid or expired handoff code."});try{await pinterestOp(e.accountId,"account");res.json({connected:true,session_token:createSessionToken(e.accountId)});}catch{return res.status(400).json({error:"Agent Neon credential unavailable; reconnect Pinterest."});}});
-app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);if(id){try{await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true});});
+app.post("/api/pinterest/disconnect",async(req,res)=>{const id=getAccountId(req);let result=null;if(id){try{result=await pinterestOp(id,"disconnect");}catch{return res.status(502).json({error:"Agent could not confirm disconnect."});}}delete req.session.pinterestAccountId;delete req.session.oauth_state;res.json({disconnected:true,local_access_disabled:result?.local_access_disabled===true,provider_token_revoked:result?.provider_token_revoked===true,message:result?.message||"Pinterest access was disconnected in this service."});});
 app.get("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});try{const r=await pinterestOp(id,"boards");res.json({boards:r.data?.items||[]});}catch{return res.status(502).json({error:"Could not reach Pinterest through Agent."});}});
 // Read-only analytics proxy: the browser never receives the Agent service key or Pinterest token.
 app.post("/api/pinterest/analytics/run",async(req,res)=>{
@@ -418,7 +423,22 @@ app.post("/api/pinterest/pins",async(req,res)=>{
     res.status(status).json({error:err?.message||"Pinterest publication failed.",outcome_unknown:status===502,idempotency_key:idempotencyKey});
   }
 });
-app.post("/api/pinterest/boards",async(req,res)=>{const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});const {name,description}=req.body;if(!name)return res.status(400).json({error:"Board name is required."});try{const r=await pinterestOp(id,"create_board",{name:String(name),description:String(description||"")});const d=r.data||{};res.json({success:true,board:{id:d.id,name:d.name,description:d.description}});}catch(err){res.status(502).json({error:err?.message||"Pinterest rejected board request."});}});
+app.post("/api/pinterest/boards",async(req,res)=>{
+  const id=getAccountId(req);if(!id)return res.status(401).json({error:"Not connected to Pinterest."});
+  const idempotencyKey=String(req.get("Idempotency-Key")||"").trim();
+  if(idempotencyKey.length<8||idempotencyKey.length>200)return res.status(400).json({error:"A valid Idempotency-Key header is required for board creation."});
+  const {name,description}=req.body||{};if(!name)return res.status(400).json({error:"Board name is required."});
+  try{
+    const r=await pinterestOp(id,"create_board",{name:String(name),description:String(description||"")},{idempotencyKey});
+    const d=r.data||{};res.json({success:true,replayed:r.replayed===true,board:{id:d.id,name:d.name,description:d.description}});
+  }catch(err){
+    const status=Number(err?.status)||502;
+    const errorMessage=String(err?.message||"");
+    const outcomeUnknown=(status===409&&/outcome is uncertain|still in progress|automatic retry is blocked/i.test(errorMessage)) || status>=500;
+    const operationRejected=status===409&&/previously rejected/i.test(errorMessage);
+    res.status(status).json({error:errorMessage||"Pinterest rejected board request.",outcome_unknown:outcomeUnknown,operation_rejected:operationRejected,idempotency_key:idempotencyKey});
+  }
+});
 
 /**
  * Affiliate URL scheduler proxy. The browser never receives the Agent APP_API_KEY.

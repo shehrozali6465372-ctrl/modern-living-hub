@@ -1,15 +1,16 @@
 {
   "name": "modern-living-hub-backend",
   "version": "1.0.0",
-  "description": "Backend for Modern Living Hub — Pinterest OAuth and API integration",
+  "description": "Backend for Modern Living Hub \u2014 Pinterest OAuth and API integration",
   "main": "src/server.js",
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test:pinterest-agent-handoff": "node test-pinterest-agent-handoff.mjs",
-    "test": "npm run test:pinterest-agent-handoff && npm run test:pinterest-analytics-ui",
-    "test:pinterest-analytics-ui": "node test-pinterest-analytics-ui.mjs"
+    "test": "npm run test:pinterest-agent-handoff && npm run test:pinterest-analytics-ui && npm run test:pinterest-model2-contract",
+    "test:pinterest-analytics-ui": "node test-pinterest-analytics-ui.mjs",
+    "test:pinterest-model2-contract": "node test-pinterest-model2-contract.mjs"
   },
   "engines": {
     "node": ">=18"

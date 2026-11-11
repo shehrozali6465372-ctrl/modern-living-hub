@@ -32,10 +32,10 @@ The backend is hosted at `https://modern-living-hub.onrender.com`.
 | GET | `/auth/pinterest/callback` | No | Pinterest OAuth callback |
 | POST | `/api/pinterest/complete` | Handoff code | Complete OAuth handoff → bearer token |
 | GET | `/api/pinterest/status` | Bearer | Check Pinterest connection status |
-| POST | `/api/pinterest/disconnect` | Bearer | Revoke Pinterest and clear tokens |
+| POST | `/api/pinterest/disconnect` | Bearer | Disable local Agent credential; provider-side revocation is not performed |
 | GET | `/api/pinterest/account` | Bearer | Get Pinterest account info |
 | GET | `/api/pinterest/boards` | Bearer | List authenticated user's boards |
-| POST | `/api/pinterest/boards` | Bearer | Create a new board |
+| POST | `/api/pinterest/boards` | Bearer + `Idempotency-Key` | Create a board through the Agent durable idempotency ledger |
 | POST | `/api/pinterest/pins` | Bearer | Create a new pin |
 
 ### TikTok
@@ -64,6 +64,13 @@ The backend is hosted at `https://modern-living-hub.onrender.com`.
 | POST | `/api/youtube/upload` | Bearer | Upload video to YouTube (multipart) |
 | GET | `/api/youtube/video-status/:videoId` | Bearer | Check video processing status |
 | POST | `/api/youtube/disconnect` | Bearer | Disconnect YouTube and clear tokens |
+
+### Model 2 board and OAuth safety contract
+
+- `POST /api/pinterest/boards` requires an `Idempotency-Key` header (8–200 characters). The Hub retains the same key for a pending request and the same request payload across retries.
+- A successful replay returns `replayed: true`. A `409` with `outcome_unknown: true` means the Agent is blocking duplicate provider writes; do not create a new operation or automatically retry with a different key. Reconcile the existing operation first.
+- An ambiguous OAuth refresh is not replayed. `GET /api/pinterest/status` reports `refresh_outcome_uncertain: true` and directs the user to reconnect or verify the account.
+- Pinterest disconnect disables the local Agent credential only. The response explicitly includes `provider_token_revoked: false`; users must revoke the app's provider-side authorization separately if they require it.
 
 ## Error Codes
 

@@ -19,6 +19,7 @@
     // ─── Configuration ───
     var BACKEND = (window.BACKEND_URL || '').replace(/\/+$/, '');
     var SESSION_TOKEN_KEY = 'mlh_session_token';
+    var PENDING_BOARD_OPERATION_KEY = 'mlh_pending_pinterest_board_operation';
     var sessionToken = localStorage.getItem(SESSION_TOKEN_KEY) || null;
 
     // ─── Backend availability helpers ───
@@ -44,6 +45,34 @@
 
     function delay(ms) {
         return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
+    function getPendingBoardOperation(name, description) {
+        var fingerprint = JSON.stringify({ name: name, description: description });
+        var pending = null;
+        try { pending = JSON.parse(localStorage.getItem(PENDING_BOARD_OPERATION_KEY) || 'null'); } catch {}
+        if (pending) {
+            if (pending.fingerprint !== fingerprint || typeof pending.key !== 'string') {
+                throw new Error('A previous board request is unresolved. Reconcile that request before starting a different board creation.');
+            }
+            return pending;
+        }
+        var bytes = new Uint8Array(16);
+        if (!window.crypto || !window.crypto.getRandomValues) {
+            throw new Error('This browser cannot securely create an idempotency key. Update the browser before creating a board.');
+        }
+        window.crypto.getRandomValues(bytes);
+        var key = Array.from(bytes, function (value) { return value.toString(16).padStart(2, '0'); }).join('');
+        pending = { key: key, fingerprint: fingerprint };
+        localStorage.setItem(PENDING_BOARD_OPERATION_KEY, JSON.stringify(pending));
+        return pending;
+    }
+
+    function clearPendingBoardOperation(key) {
+        try {
+            var pending = JSON.parse(localStorage.getItem(PENDING_BOARD_OPERATION_KEY) || 'null');
+            if (pending && pending.key === key) localStorage.removeItem(PENDING_BOARD_OPERATION_KEY);
+        } catch {}
     }
 
     // ─── DOM references ───
@@ -153,7 +182,9 @@
                 showDisconnectedUI();
                 updateConnectLinks('consent');
                 if (disconnectError) {
-                    disconnectError.textContent = '⚠️ Your Pinterest token is missing required permissions. Please reconnect Pinterest to grant all permissions.';
+                    disconnectError.textContent = data.refresh_outcome_uncertain
+                        ? '⚠️ Pinterest token refresh may have completed, but its final state is uncertain. Do not retry refresh; reconnect Pinterest or verify the account before continuing.'
+                        : '⚠️ Pinterest authorization needs attention. Please reconnect Pinterest to restore access.';
                     disconnectError.style.display = 'block';
                 }
             } else {
@@ -242,23 +273,39 @@
             var description = document.getElementById('board-description').value.trim();
             if (!name) return;
 
+            var pendingBoardOperation;
+            try {
+                pendingBoardOperation = getPendingBoardOperation(name, description);
+            } catch (error) {
+                showError(boardResult, error.message || 'A previous board operation must be reconciled first.');
+                return;
+            }
+
             boardResult.textContent = 'Creating board…';
             boardResult.style.color = 'var(--color-text-light)';
 
             try {
                 var res = await fetch(BACKEND + '/api/pinterest/boards', {
                     method: 'POST',
-                    headers: authHeaders({ 'Content-Type': 'application/json' }),
+                    headers: authHeaders({ 'Content-Type': 'application/json', 'Idempotency-Key': pendingBoardOperation.key }),
                     credentials: 'include',
                     body: JSON.stringify({ name: name, description: description })
                 });
                 var data = await res.json();
                 if (!res.ok) {
-                    boardResult.textContent = '❌ ' + (data.error || 'Failed to create board.');
+                    if (data.operation_rejected || (!data.outcome_unknown && res.status < 500 && res.status !== 409)) {
+                        clearPendingBoardOperation(pendingBoardOperation.key);
+                    }
+                    boardResult.textContent = '❌ ' + (data.outcome_unknown
+                        ? 'Board creation outcome is uncertain. Do not create another board; reconcile the existing operation first. ' + (data.error || '')
+                        : (data.operation_rejected
+                            ? 'The previous board operation was definitively rejected. Resolve the rejection before submitting a new operation. ' + (data.error || '')
+                            : (data.error || 'Failed to create board.')));
                     boardResult.style.color = 'var(--color-error)';
                     return;
                 }
-                boardResult.innerHTML = '✅ Board created: <strong>' + escapeHtml(data.board.name) + '</strong>';
+                clearPendingBoardOperation(pendingBoardOperation.key);
+                boardResult.textContent = (data.replayed ? '✓ Existing board creation result recovered: ' : '✓ Board created: ') + (data.board.name || name);
                 boardResult.style.color = 'var(--color-success)';
                 createBoardForm.reset();
                 // Refresh board dropdown with retry for Pinterest eventual consistency
@@ -276,7 +323,7 @@
                     }
                 }
             } catch {
-                boardResult.textContent = '❌ Could not reach the server. Please try again.';
+                boardResult.textContent = '⚠️ Network outcome is uncertain. The same idempotency key has been retained; do not start a different board creation until this operation is reconciled.';
                 boardResult.style.color = 'var(--color-error)';
             }
         });
@@ -370,6 +417,9 @@
                 sessionToken = null;
                 localStorage.removeItem(SESSION_TOKEN_KEY);
                 showDisconnectedUI();
+                if (data.provider_token_revoked === false) {
+                    showError(disconnectError, 'Pinterest was disconnected locally. Pinterest-side token revocation was NOT performed; revoke Modern Living Hub access separately in your Pinterest account settings if required.');
+                }
             }
         } catch {
             showError(disconnectError, 'Could not reach the server.');
