@@ -361,6 +361,12 @@ async function pinterestOp(accountId,operation,payload={},options={}) {
     return request();
   }
 }
+function isTransientPinterestAgentFailure(err) {
+  const status=Number(err?.status);
+  const message=String(err?.message||"");
+  if(Number.isInteger(status)&&status>=500&&status<=599)return true;
+  return !Number.isFinite(status)&&/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|timeout|timed out|aborted|AbortError|TimeoutError|network error|socket hang up/i.test(message);
+}
 function isAmbiguousPinterestRefreshFailure(err) {
   if(err?.pinterestRefreshAttempted!==true)return false;
   const status=Number(err?.status);
@@ -374,6 +380,7 @@ function isAmbiguousPinterestRefreshFailure(err) {
 }
 app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch(err){
   if(isAmbiguousPinterestRefreshFailure(err))return res.json({connected:false,needs_reauth:true,refresh_outcome_uncertain:true,message:"Pinterest refresh outcome is uncertain. Do not retry refresh; reconnect Pinterest or verify the account first."});
+  if(isTransientPinterestAgentFailure(err))return res.json({connected:false,agent_unavailable:true,message:"Pinterest Agent is temporarily unavailable. Your authorization has not been confirmed as invalid; do not reconnect yet. Retry after the Agent recovers."});
   res.json({connected:false,needs_reauth:true});
 }});
 app.post("/api/pinterest/complete",(req,res,next)=>{

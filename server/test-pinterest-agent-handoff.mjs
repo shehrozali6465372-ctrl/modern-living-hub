@@ -391,7 +391,7 @@ try {
     headers: { Authorization: `Bearer ${completeBody.session_token}` },
   });
   assert.equal(definitiveRefreshInfrastructureFailure.status, 200);
-  assert.deepEqual(await definitiveRefreshInfrastructureFailure.json(), { connected: false, needs_reauth: true }, "pre-provider 503 must not be mislabeled as an uncertain refresh");
+  assert.deepEqual(await definitiveRefreshInfrastructureFailure.json(), { connected: false, agent_unavailable: true, message: "Pinterest Agent is temporarily unavailable. Your authorization has not been confirmed as invalid; do not reconnect yet. Retry after the Agent recovers." }, "pre-provider 503 must be surfaced as Agent unavailable, not an uncertain refresh or invalid authorization");
 
   observed.refreshStatus = 200;
   observed.rejectFirstOperation = true;
@@ -425,7 +425,7 @@ try {
     headers: { Authorization: `Bearer ${completeBody.session_token}` },
   });
   assert.equal(accountFailure.status, 200);
-  assert.deepEqual(await accountFailure.json(), { connected: false, needs_reauth: true });
+  assert.deepEqual(await accountFailure.json(), { connected: false, agent_unavailable: true, message: "Pinterest Agent is temporarily unavailable. Your authorization has not been confirmed as invalid; do not reconnect yet. Retry after the Agent recovers." });
   assert.equal(observed.refreshRequests.length, refreshCountBeforeAccountFailure, "account-operation 5xx must not be treated as an attempted OAuth refresh");
   observed.accountStatus = 200;
   observed.accountDetail = "sanitized account failure";

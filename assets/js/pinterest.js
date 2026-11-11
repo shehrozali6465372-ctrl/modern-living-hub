@@ -175,6 +175,12 @@
             var data = await res.json();
             if (data.connected === true) {
                 showConnectedUI();
+            } else if (data.agent_unavailable) {
+                if (disconnectError) {
+                    disconnectError.textContent = '⚠️ ' + (data.message || 'Pinterest Agent is temporarily unavailable. Your authorization has not been confirmed as invalid; do not reconnect yet.');
+                    disconnectError.style.display = 'block';
+                }
+                return;
             } else if (data.needs_reauth) {
                 // Token lacks required scopes — force fresh OAuth with prompt=consent
                 sessionToken = null;
