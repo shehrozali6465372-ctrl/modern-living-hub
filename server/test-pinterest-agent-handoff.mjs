@@ -24,7 +24,7 @@ const realFetch = globalThis.fetch;
 const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
 const observedTimeouts = [];
 AbortSignal.timeout = (milliseconds) => { observedTimeouts.push(milliseconds); return realAbortSignalTimeout(milliseconds); };
-const observed = { credentialRequests: [], operations: [], operationHeaders: [], boardReplay: false, boardStatus: 200, boardRejected: false, refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, refreshDetail: "sanitized refresh failure", refreshNetworkFailure: false, accountStatus: 200, accountDetail: "sanitized account failure", schedulerRequests: [] };
+const observed = { credentialRequests: [], operations: [], operationHeaders: [], boardReplay: false, boardStatus: 200, boardRejected: false, boardDetail: "Pinterest API rejected or could not complete the operation.", refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, refreshDetail: "sanitized refresh failure", refreshNetworkFailure: false, accountStatus: 200, accountDetail: "sanitized account failure", schedulerRequests: [] };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -106,7 +106,7 @@ globalThis.fetch = async (input, init = {}) => {
     if (body.operation === "account" && observed.accountStatus !== 200) {
       return new Response(JSON.stringify({ detail: observed.accountDetail }), { status: observed.accountStatus, headers: { "content-type": "application/json" } });
     }
-    if (body.operation === "create_board") return new Response(JSON.stringify(observed.boardStatus === 200 ? { data: { id: "mock-board-id", name: body.payload.name, description: body.payload.description }, replayed: observed.boardReplay } : { detail: observed.boardRejected ? "This board operation was previously rejected; use a new reviewed operation after resolving the rejection." : "Board creation outcome is uncertain or still in progress; automatic retry is blocked pending reconciliation." }), { status: observed.boardStatus, headers: { "content-type": "application/json" } });
+    if (body.operation === "create_board") return new Response(JSON.stringify(observed.boardStatus === 200 ? { data: { id: "mock-board-id", name: body.payload.name, description: body.payload.description }, replayed: observed.boardReplay } : { detail: observed.boardRejected ? "This board operation was previously rejected; use a new reviewed operation after resolving the rejection." : observed.boardDetail }), { status: observed.boardStatus, headers: { "content-type": "application/json" } });
     if (body.operation === "disconnect") return new Response(JSON.stringify({ disconnected: true, local_access_disabled: true, provider_token_revoked: false, message: "Local credential disabled; Pinterest-side token revocation was not performed." }), { status: 200, headers: { "content-type": "application/json" } });
     return new Response(JSON.stringify({ data: { id: "123456789", username: "mlh_test_user" } }), { status: 200, headers: { "content-type": "application/json" } });
   }
@@ -294,6 +294,7 @@ try {
   assert.equal(observed.operationHeaders.at(-1).get("idempotency-key"), boardKey);
   observed.boardReplay = false;
   observed.boardStatus = 409;
+  observed.boardDetail = "Board creation outcome is uncertain or still in progress; automatic retry is blocked pending reconciliation.";
   const uncertainBoardOpsBefore = observed.operations.length;
   const uncertainBoard = await realFetch(`${localBase}/api/pinterest/boards`, {
     method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, "Idempotency-Key": "hub-board-uncertain-0001" },
@@ -303,6 +304,7 @@ try {
   assert.equal((await uncertainBoard.json()).outcome_unknown, true);
   assert.equal(observed.operations.length, uncertainBoardOpsBefore + 1, "uncertain board outcome must not trigger an automatic retry");
   observed.boardStatus = 200;
+  observed.boardDetail = "Pinterest API rejected or could not complete the operation.";
   observed.boardStatus = 409;
   observed.boardRejected = true;
   const rejectedBoard = await realFetch(`${localBase}/api/pinterest/boards`, {
@@ -315,6 +317,25 @@ try {
   assert.equal(rejectedBoardBody.operation_rejected, true, "definitive rejection must be distinguished from uncertain outcome");
   observed.boardStatus = 200;
   observed.boardRejected = false;
+  observed.boardStatus = 400;
+  observed.boardDetail = "Pinterest API rejected or could not complete the operation.";
+  const definitiveBoardRejection = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, "Idempotency-Key": "hub-board-provider-rejected-0001" },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(definitiveBoardRejection.status, 400);
+  assert.equal((await definitiveBoardRejection.json()).operation_rejected, true, "Agent-confirmed provider rejection must be distinguishable from a Hub-level 4xx");
+  observed.boardStatus = 200;
+  observed.boardDetail = "Pinterest API rejected or could not complete the operation.";
+
+  // A Hub-level 401 occurs before the Agent sees the request and must not create or clear an Agent idempotency result.
+  const operationsBeforeHubUnauthorized = observed.operations.length;
+  const hubUnauthorizedBoard = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": "hub-board-hub-401-0001" },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(hubUnauthorizedBoard.status, 401);
+  assert.equal(observed.operations.length, operationsBeforeHubUnauthorized, "Hub-level 401 must not reach the Agent");
 
   // A preflight 401 may refresh once; the same board idempotency key must survive that retry.
   observed.rejectFirstOperation = true;

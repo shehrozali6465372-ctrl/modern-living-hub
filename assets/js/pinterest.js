@@ -299,7 +299,7 @@
                 });
                 var data = await res.json();
                 if (!res.ok) {
-                    if (data.operation_rejected || (!data.outcome_unknown && res.status < 500 && res.status !== 409)) {
+                    if (data.operation_rejected === true) {
                         clearPendingBoardOperation(pendingBoardOperation.key);
                     }
                     boardResult.textContent = '❌ ' + (data.outcome_unknown

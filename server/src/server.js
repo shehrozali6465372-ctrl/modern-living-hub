@@ -459,7 +459,8 @@ app.post("/api/pinterest/boards",async(req,res)=>{
     const status=Number(err?.status)||502;
     const errorMessage=String(err?.message||"");
     const outcomeUnknown=(status===409&&/outcome is uncertain|still in progress|automatic retry is blocked/i.test(errorMessage)) || status>=500;
-    const operationRejected=status===409&&/previously rejected/i.test(errorMessage);
+    const operationRejected=(status===409&&/previously rejected/i.test(errorMessage))
+      || (status<500&&status!==401&&/Pinterest API rejected or could not complete the operation/i.test(errorMessage));
     res.status(status).json({error:errorMessage||"Pinterest rejected board request.",outcome_unknown:outcomeUnknown,operation_rejected:operationRejected,idempotency_key:idempotencyKey});
   }
 });
