@@ -24,7 +24,7 @@ const realFetch = globalThis.fetch;
 const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
 const observedTimeouts = [];
 AbortSignal.timeout = (milliseconds) => { observedTimeouts.push(milliseconds); return realAbortSignalTimeout(milliseconds); };
-const observed = { credentialRequests: [], operations: [], operationHeaders: [], boardReplay: false, boardStatus: 200, boardRejected: false, refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, refreshDetail: "sanitized refresh failure", refreshNetworkFailure: false, schedulerRequests: [] };
+const observed = { credentialRequests: [], operations: [], operationHeaders: [], boardReplay: false, boardStatus: 200, boardRejected: false, refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, refreshDetail: "sanitized refresh failure", refreshNetworkFailure: false, accountStatus: 200, accountDetail: "sanitized account failure", schedulerRequests: [] };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -102,6 +102,9 @@ globalThis.fetch = async (input, init = {}) => {
     if (observed.rejectFirstOperation) {
       observed.rejectFirstOperation = false;
       return new Response(JSON.stringify({ detail: "Pinterest API rejected or could not complete the operation." }), { status: 401, headers: { "content-type": "application/json" } });
+    }
+    if (body.operation === "account" && observed.accountStatus !== 200) {
+      return new Response(JSON.stringify({ detail: observed.accountDetail }), { status: observed.accountStatus, headers: { "content-type": "application/json" } });
     }
     if (body.operation === "create_board") return new Response(JSON.stringify(observed.boardStatus === 200 ? { data: { id: "mock-board-id", name: body.payload.name, description: body.payload.description }, replayed: observed.boardReplay } : { detail: observed.boardRejected ? "This board operation was previously rejected; use a new reviewed operation after resolving the rejection." : "Board creation outcome is uncertain or still in progress; automatic retry is blocked pending reconciliation." }), { status: observed.boardStatus, headers: { "content-type": "application/json" } });
     if (body.operation === "disconnect") return new Response(JSON.stringify({ disconnected: true, local_access_disabled: true, provider_token_revoked: false, message: "Local credential disabled; Pinterest-side token revocation was not performed." }), { status: 200, headers: { "content-type": "application/json" } });
@@ -413,6 +416,19 @@ try {
   assert.deepEqual(await definitiveRefreshFailure.json(), { connected: false, needs_reauth: true }, "definitive 4xx must not be mislabeled as uncertain");
   observed.refreshStatus = 200;
   observed.refreshDetail = "sanitized refresh failure";
+
+  // A 5xx from the original account operation is not a refresh failure and must not be mislabeled.
+  observed.accountStatus = 502;
+  observed.accountDetail = "Stored Pinterest account could not be verified; operation was not sent.";
+  const refreshCountBeforeAccountFailure = observed.refreshRequests.length;
+  const accountFailure = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(accountFailure.status, 200);
+  assert.deepEqual(await accountFailure.json(), { connected: false, needs_reauth: true });
+  assert.equal(observed.refreshRequests.length, refreshCountBeforeAccountFailure, "account-operation 5xx must not be treated as an attempted OAuth refresh");
+  observed.accountStatus = 200;
+  observed.accountDetail = "sanitized account failure";
 
   // Disconnect is local-only in Model 2; Hub must not imply provider token revocation.
   const disconnectResponse = await realFetch(`${localBase}/api/pinterest/disconnect`, {

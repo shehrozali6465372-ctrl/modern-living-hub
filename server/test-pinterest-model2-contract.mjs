@@ -21,4 +21,5 @@ assert.match(server, /refresh_outcome_uncertain:true/);
 assert.match(server, /status>=500&&status<=599/);
 assert.match(server, /no OAuth request was sent/);
 assert.match(server, /fetch failed|ECONNRESET/);
+assert.match(server, /pinterestRefreshAttempted/);
 console.log("Pinterest Model 2 Hub contract PASS (stable board key, replay handling, uncertain outcome, refresh and disconnect disclosures).");

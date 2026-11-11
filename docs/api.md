@@ -69,7 +69,7 @@ The backend is hosted at `https://modern-living-hub.onrender.com`.
 
 - `POST /api/pinterest/boards` requires an `Idempotency-Key` header (8–200 characters). The Hub retains the same key for a pending request and the same request payload across retries.
 - A successful replay returns `replayed: true`. A `409` with `outcome_unknown: true` means the Agent is blocking duplicate provider writes; do not create a new operation or automatically retry with a different key. Reconcile the existing operation first.
-- An ambiguous OAuth refresh is not replayed. HTTP 5xx and transport/timeout failures are also surfaced as uncertain; definitive 4xx responses are not mislabeled. `GET /api/pinterest/status` reports `refresh_outcome_uncertain: true` and directs the user to reconnect or verify the account.
+- An ambiguous OAuth refresh is not replayed. HTTP 5xx and transport/timeout failures from the refresh request are also surfaced as uncertain; failures from the original account operation are not mislabeled as refresh outcomes, and definitive pre-provider/4xx refresh errors remain distinct. `GET /api/pinterest/status` reports `refresh_outcome_uncertain: true` and directs the user to reconnect or verify the account.
 - Pinterest disconnect disables the local Agent credential only. The response explicitly includes `provider_token_revoked: false`; users must revoke the app's provider-side authorization separately if they require it.
 
 ## Error Codes

@@ -347,14 +347,22 @@ async function pinterestOp(accountId,operation,payload={},options={}) {
     // OAuth refresh can rotate and invalidate the submitted refresh token. A
     // timeout/5xx may be an ambiguous outcome, so never automatically replay
     // this non-idempotent POST; let the caller reconcile or reconnect instead.
-    await agentRequest("/integrations/pinterest/refresh",{
-      method:"POST",
-      body:JSON.stringify({account_id:accountId,client_id:CLIENT_ID,client_secret:CLIENT_SECRET})
-    });
+    try {
+      await agentRequest("/integrations/pinterest/refresh",{
+        method:"POST",
+        body:JSON.stringify({account_id:accountId,client_id:CLIENT_ID,client_secret:CLIENT_SECRET})
+      });
+    } catch (refreshErr) {
+      const wrapped = new Error(String(refreshErr?.message || "Pinterest refresh request failed."));
+      if (refreshErr?.status !== undefined) wrapped.status = refreshErr.status;
+      wrapped.pinterestRefreshAttempted = true;
+      throw wrapped;
+    }
     return request();
   }
 }
 function isAmbiguousPinterestRefreshFailure(err) {
+  if(err?.pinterestRefreshAttempted!==true)return false;
   const status=Number(err?.status);
   const message=String(err?.message||"");
   if(status===409&&/outcome is uncertain|still in progress|automatic retry is blocked/i.test(message))return true;
