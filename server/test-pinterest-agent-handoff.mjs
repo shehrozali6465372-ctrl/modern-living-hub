@@ -24,7 +24,7 @@ const realFetch = globalThis.fetch;
 const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
 const observedTimeouts = [];
 AbortSignal.timeout = (milliseconds) => { observedTimeouts.push(milliseconds); return realAbortSignalTimeout(milliseconds); };
-const observed = { credentialRequests: [], operations: [], refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, schedulerRequests: [] };
+const observed = { credentialRequests: [], operations: [], operationHeaders: [], boardReplay: false, boardStatus: 200, boardRejected: false, boardDetail: "Pinterest API rejected or could not complete the operation.", refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, refreshDetail: "sanitized refresh failure", refreshNetworkFailure: false, accountStatus: 200, accountDetail: "sanitized account failure", schedulerRequests: [] };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -63,7 +63,11 @@ globalThis.fetch = async (input, init = {}) => {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
     const body = JSON.parse(init.body);
     observed.refreshRequests.push(body);
-    return new Response(JSON.stringify(observed.refreshStatus === 200 ? { refreshed: true, account_id: body.account_id } : { detail: "sanitized refresh failure" }), { status: observed.refreshStatus, headers: { "content-type": "application/json" } });
+    if (observed.refreshNetworkFailure) {
+      observed.refreshNetworkFailure = false;
+      throw new TypeError("fetch failed");
+    }
+    return new Response(JSON.stringify(observed.refreshStatus === 200 ? { refreshed: true, account_id: body.account_id } : { detail: observed.refreshStatus === 409 ? "Pinterest refresh outcome is uncertain or still in progress; automatic retry is blocked. Reconnect or verify the account before another refresh." : observed.refreshDetail }), { status: observed.refreshStatus, headers: { "content-type": "application/json" } });
   }
   if (url === `${agentBase}/workflow/publish-hub-pin`) {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
@@ -94,10 +98,16 @@ globalThis.fetch = async (input, init = {}) => {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
     const body = JSON.parse(init.body);
     observed.operations.push(body);
+    observed.operationHeaders.push(new Headers(init.headers));
     if (observed.rejectFirstOperation) {
       observed.rejectFirstOperation = false;
       return new Response(JSON.stringify({ detail: "Pinterest API rejected or could not complete the operation." }), { status: 401, headers: { "content-type": "application/json" } });
     }
+    if (body.operation === "account" && observed.accountStatus !== 200) {
+      return new Response(JSON.stringify({ detail: observed.accountDetail }), { status: observed.accountStatus, headers: { "content-type": "application/json" } });
+    }
+    if (body.operation === "create_board") return new Response(JSON.stringify(observed.boardStatus === 200 ? { data: { id: "mock-board-id", name: body.payload.name, description: body.payload.description }, replayed: observed.boardReplay } : { detail: observed.boardRejected ? "This board operation was previously rejected; use a new reviewed operation after resolving the rejection." : observed.boardDetail }), { status: observed.boardStatus, headers: { "content-type": "application/json" } });
+    if (body.operation === "disconnect") return new Response(JSON.stringify({ disconnected: true, local_access_disabled: true, provider_token_revoked: false, message: "Local credential disabled; Pinterest-side token revocation was not performed." }), { status: 200, headers: { "content-type": "application/json" } });
     return new Response(JSON.stringify({ data: { id: "123456789", username: "mlh_test_user" } }), { status: 200, headers: { "content-type": "application/json" } });
   }
   throw new Error(`Unexpected upstream request in test: ${url}`);
@@ -257,6 +267,90 @@ try {
   assert.equal(observed.schedulerRequests.length, 6, "status ownership must be checked before activate and pause");
   assert.equal(observed.publishRequests.length, 0, "scheduler proxy tests must not call any Pin publication route");
 
+  // Board creation must carry a stable idempotency key through the Hub boundary.
+  const missingBoardKey = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}` },
+    body: JSON.stringify({ name: "Model 2 contract test", description: "No provider call without a key" }),
+  });
+  assert.equal(missingBoardKey.status, 400);
+  const boardKey = "hub-board-operation-0001";
+  const boardPayload = { name: "Model 2 contract test", description: "Idempotency contract only" };
+  const boardCreated = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, "Idempotency-Key": boardKey },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(boardCreated.status, 200);
+  const boardCreatedBody = await boardCreated.json();
+  assert.equal(boardCreatedBody.board.id, "mock-board-id");
+  assert.equal(boardCreatedBody.replayed, false);
+  assert.equal(observed.operationHeaders.at(-1).get("idempotency-key"), boardKey);
+  observed.boardReplay = true;
+  const boardReplay = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, "Idempotency-Key": boardKey },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(boardReplay.status, 200);
+  assert.equal((await boardReplay.json()).replayed, true);
+  assert.equal(observed.operationHeaders.at(-1).get("idempotency-key"), boardKey);
+  observed.boardReplay = false;
+  observed.boardStatus = 409;
+  observed.boardDetail = "Board creation outcome is uncertain or still in progress; automatic retry is blocked pending reconciliation.";
+  const uncertainBoardOpsBefore = observed.operations.length;
+  const uncertainBoard = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, "Idempotency-Key": "hub-board-uncertain-0001" },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(uncertainBoard.status, 409);
+  assert.equal((await uncertainBoard.json()).outcome_unknown, true);
+  assert.equal(observed.operations.length, uncertainBoardOpsBefore + 1, "uncertain board outcome must not trigger an automatic retry");
+  observed.boardStatus = 200;
+  observed.boardDetail = "Pinterest API rejected or could not complete the operation.";
+  observed.boardStatus = 409;
+  observed.boardRejected = true;
+  const rejectedBoard = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, "Idempotency-Key": "hub-board-rejected-0001" },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(rejectedBoard.status, 409);
+  const rejectedBoardBody = await rejectedBoard.json();
+  assert.equal(rejectedBoardBody.outcome_unknown, false);
+  assert.equal(rejectedBoardBody.operation_rejected, true, "definitive rejection must be distinguished from uncertain outcome");
+  observed.boardStatus = 200;
+  observed.boardRejected = false;
+  observed.boardStatus = 400;
+  observed.boardDetail = "Pinterest API rejected or could not complete the operation.";
+  const definitiveBoardRejection = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, "Idempotency-Key": "hub-board-provider-rejected-0001" },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(definitiveBoardRejection.status, 400);
+  assert.equal((await definitiveBoardRejection.json()).operation_rejected, true, "Agent-confirmed provider rejection must be distinguishable from a Hub-level 4xx");
+  observed.boardStatus = 200;
+  observed.boardDetail = "Pinterest API rejected or could not complete the operation.";
+
+  // A Hub-level 401 occurs before the Agent sees the request and must not create or clear an Agent idempotency result.
+  const operationsBeforeHubUnauthorized = observed.operations.length;
+  const hubUnauthorizedBoard = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": "hub-board-hub-401-0001" },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(hubUnauthorizedBoard.status, 401);
+  assert.equal(observed.operations.length, operationsBeforeHubUnauthorized, "Hub-level 401 must not reach the Agent");
+
+  // A preflight 401 may refresh once; the same board idempotency key must survive that retry.
+  observed.rejectFirstOperation = true;
+  const refreshesBeforeBoardRetry = observed.refreshRequests.length;
+  const boardRetry = await realFetch(`${localBase}/api/pinterest/boards`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${completeBody.session_token}`, "Idempotency-Key": "hub-board-refresh-retry-0001" },
+    body: JSON.stringify(boardPayload),
+  });
+  assert.equal(boardRetry.status, 200);
+  const retryHeaders = observed.operationHeaders.slice(-2);
+  assert.equal(retryHeaders.length, 2);
+  assert.equal(retryHeaders[0].get("idempotency-key"), "hub-board-refresh-retry-0001");
+  assert.equal(retryHeaders[1].get("idempotency-key"), "hub-board-refresh-retry-0001");
+  assert.equal(observed.refreshRequests.length, refreshesBeforeBoardRetry + 1);
+
   // Hub Pin writes must use the Agent's canonical idempotent publication gateway.
   const hubPinResponse = await realFetch(`${localBase}/api/pinterest/pins`, {
     method: "POST",
@@ -284,20 +378,87 @@ try {
   assert.equal(observed.publishRequests[0].body.destination_url, "https://example.com/product?tag=affiliate-20");
   assert.equal(observed.operations.some((entry) => entry.operation === "create_pin"), false);
 
-  // A refresh 5xx is an ambiguous, non-idempotent OAuth outcome. The Hub must
+  // A Model 2 refresh 409 is an ambiguous, non-idempotent OAuth outcome. The Hub must
   // make exactly one refresh attempt and must not replay the old refresh token.
   observed.rejectFirstOperation = true;
-  observed.refreshStatus = 503;
+  observed.refreshStatus = 409;
   const refreshCountBeforeFailure = observed.refreshRequests.length;
   const operationCountBeforeFailure = observed.operations.length;
   const failedRefreshStatus = await realFetch(`${localBase}/api/pinterest/status`, {
     headers: { Authorization: `Bearer ${completeBody.session_token}` },
   });
   assert.equal(failedRefreshStatus.status, 200);
-  assert.deepEqual(await failedRefreshStatus.json(), { connected: false, needs_reauth: true });
+  assert.deepEqual(await failedRefreshStatus.json(), { connected: false, needs_reauth: true, refresh_outcome_uncertain: true, message: "Pinterest refresh outcome is uncertain. Do not retry refresh; reconnect Pinterest or verify the account first." });
   assert.equal(observed.refreshRequests.length, refreshCountBeforeFailure + 1, "ambiguous OAuth refresh must never be automatically replayed");
   assert.equal(observed.operations.length, operationCountBeforeFailure + 1, "do not retry the protected operation when refresh was not confirmed");
+  observed.refreshStatus = 503;
+  observed.refreshDetail = "Pinterest OAuth refresh outcome is uncertain; automatic retry is blocked.";
+  observed.rejectFirstOperation = true;
+  const refreshCountBefore5xx = observed.refreshRequests.length;
+  const operationCountBefore5xx = observed.operations.length;
+  const failedRefresh5xx = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(failedRefresh5xx.status, 200);
+  const failedRefresh5xxBody = await failedRefresh5xx.json();
+  assert.equal(failedRefresh5xxBody.refresh_outcome_uncertain, true, "5xx after refresh attempt must be surfaced as uncertain");
+  assert.equal(observed.refreshRequests.length, refreshCountBefore5xx + 1);
+  assert.equal(observed.operations.length, operationCountBefore5xx + 1, "protected operation must not replay after ambiguous 5xx refresh");
+
+  observed.refreshStatus = 503;
+  observed.refreshDetail = "Pinterest refresh ledger is unavailable; no OAuth request was sent.";
+  observed.rejectFirstOperation = true;
+  const definitiveRefreshInfrastructureFailure = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(definitiveRefreshInfrastructureFailure.status, 200);
+  assert.deepEqual(await definitiveRefreshInfrastructureFailure.json(), { connected: false, agent_unavailable: true, message: "Pinterest Agent is temporarily unavailable. Your authorization has not been confirmed as invalid; do not reconnect yet. Retry after the Agent recovers." }, "pre-provider 503 must be surfaced as Agent unavailable, not an uncertain refresh or invalid authorization");
+
   observed.refreshStatus = 200;
+  observed.rejectFirstOperation = true;
+  observed.refreshNetworkFailure = true;
+  const refreshCountBeforeNetwork = observed.refreshRequests.length;
+  const operationCountBeforeNetwork = observed.operations.length;
+  const failedRefreshNetwork = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(failedRefreshNetwork.status, 200);
+  assert.equal((await failedRefreshNetwork.json()).refresh_outcome_uncertain, true, "transport failure during refresh must be surfaced as uncertain");
+  assert.equal(observed.refreshRequests.length, refreshCountBeforeNetwork + 1);
+  assert.equal(observed.operations.length, operationCountBeforeNetwork + 1, "protected operation must not replay after ambiguous transport failure");
+
+  observed.refreshStatus = 400;
+  observed.refreshDetail = "Pinterest rejected token refresh. Reconnect the account if the refresh token is invalid or expired.";
+  observed.rejectFirstOperation = true;
+  const definitiveRefreshFailure = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(definitiveRefreshFailure.status, 200);
+  assert.deepEqual(await definitiveRefreshFailure.json(), { connected: false, needs_reauth: true }, "definitive 4xx must not be mislabeled as uncertain");
+  observed.refreshStatus = 200;
+  observed.refreshDetail = "sanitized refresh failure";
+
+  // A 5xx from the original account operation is not a refresh failure and must not be mislabeled.
+  observed.accountStatus = 502;
+  observed.accountDetail = "Stored Pinterest account could not be verified; operation was not sent.";
+  const refreshCountBeforeAccountFailure = observed.refreshRequests.length;
+  const accountFailure = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(accountFailure.status, 200);
+  assert.deepEqual(await accountFailure.json(), { connected: false, agent_unavailable: true, message: "Pinterest Agent is temporarily unavailable. Your authorization has not been confirmed as invalid; do not reconnect yet. Retry after the Agent recovers." });
+  assert.equal(observed.refreshRequests.length, refreshCountBeforeAccountFailure, "account-operation 5xx must not be treated as an attempted OAuth refresh");
+  observed.accountStatus = 200;
+  observed.accountDetail = "sanitized account failure";
+
+  // Disconnect is local-only in Model 2; Hub must not imply provider token revocation.
+  const disconnectResponse = await realFetch(`${localBase}/api/pinterest/disconnect`, {
+    method: "POST", headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(disconnectResponse.status, 200);
+  const disconnectBody = await disconnectResponse.json();
+  assert.equal(disconnectBody.disconnected, true);
+  assert.equal(disconnectBody.provider_token_revoked, false);
 
   // Signed sessions must not depend on per-process memory and must reject tampering.
   const tamperedToken = completeBody.session_token.replace(/.$/, completeBody.session_token.endsWith("a") ? "b" : "a");
@@ -316,7 +477,7 @@ try {
   assert.notEqual(failedUrl.searchParams.get("pinterest_connected"), "1");
   assert.equal(observed.credentialRequests.length, 2);
 
-  console.log("PB-05/PB-04 PASS: authenticated Agent ingestion, OAuth handoff, one-time 401 refresh, no replay after ambiguous refresh 5xx, retry, expiry persistence, and fail-closed storage verified (mocked upstreams only).");
+  console.log("PB-05/PB-04 PASS: authenticated Agent ingestion, OAuth handoff, one-time 401 refresh, no replay after ambiguous refresh 409/5xx/transport failures, definitive error classification, retry, expiry persistence, and fail-closed storage verified (mocked upstreams only).");
 } catch (error) {
   exitCode = 1;
   console.error("PB-04 FAIL:", error?.stack || String(error));
