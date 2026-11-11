@@ -99,7 +99,7 @@
 
 - Current Agent feature head `6f9560d3cdf06f96e40e8cde7c0148edb7e384f4` requires `Idempotency-Key` for `create_board`, returns `replayed: true` for a completed duplicate, and returns `409` for uncertain/in-progress operations. The Hub's prior `main` code did not forward a board key.
 - Hub branch `fix/model2-board-idempotency-contract` now requires and forwards the key, exposes replay metadata, preserves the same browser-side key for an identical pending payload, blocks a different board request while the previous one is unresolved, and does not automatically retry uncertain outcomes.
-- The Hub now surfaces Model 2 OAuth-refresh uncertainty and explicitly reports `provider_token_revoked: false` on local-only disconnect.
+- The Hub now surfaces Model 2 OAuth-refresh uncertainty for uncertain `409`, HTTP 5xx and transport/timeout failures (without replaying refresh); definitive 4xx responses remain distinct. It explicitly reports `provider_token_revoked: false` on local-only disconnect.
 - Mocked Hub-to-Agent integration tests cover missing key rejection, key forwarding, replay response, uncertain `409` without retry, key preservation across a preflight `401` refresh, refresh uncertainty, and local-only disconnect semantics.
 - `npm test` passes, including the new Model 2 static UI contract suite. All upstream calls in the Hub tests are mocked; no real Pinterest Board or Pin was created, no OAuth token was refreshed, and no production database or deployment was touched.
 - Changes remain local and uncommitted on a dedicated Hub feature branch. PR, merge, and deployment are not yet performed.

@@ -18,4 +18,7 @@ assert.match(server, /replayed:r\.replayed===true/);
 assert.match(server, /operationRejected=status===409/);
 assert.match(server, /provider_token_revoked:result\?\.provider_token_revoked===true/);
 assert.match(server, /refresh_outcome_uncertain:true/);
+assert.match(server, /status>=500&&status<=599/);
+assert.match(server, /no OAuth request was sent/);
+assert.match(server, /fetch failed|ECONNRESET/);
 console.log("Pinterest Model 2 Hub contract PASS (stable board key, replay handling, uncertain outcome, refresh and disconnect disclosures).");

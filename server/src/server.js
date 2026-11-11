@@ -354,9 +354,18 @@ async function pinterestOp(accountId,operation,payload={},options={}) {
     return request();
   }
 }
+function isAmbiguousPinterestRefreshFailure(err) {
+  const status=Number(err?.status);
+  const message=String(err?.message||"");
+  if(status===409&&/outcome is uncertain|still in progress|automatic retry is blocked/i.test(message))return true;
+  if(Number.isInteger(status)&&status>=500&&status<=599){
+    if(/no OAuth request was sent|credential lookup failed|failed authenticated decryption|encryption is not configured|DATABASE_URL is not configured|expiry is invalid|expiry invalid/i.test(message))return false;
+    return true;
+  }
+  return !Number.isFinite(status)&&/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|timeout|timed out|aborted|AbortError|TimeoutError|network error|socket hang up/i.test(message);
+}
 app.get("/api/pinterest/status",async(req,res)=>{const id=getAccountId(req);if(!id)return res.json({connected:false});try{const r=await pinterestOp(id,"account");res.json({connected:true,id:r.data?.id||null,username:r.data?.username||null});}catch(err){
-  const refreshUncertain = err?.status === 409 && /outcome is uncertain|still in progress|automatic retry is blocked/i.test(String(err?.message||""));
-  if(refreshUncertain)return res.json({connected:false,needs_reauth:true,refresh_outcome_uncertain:true,message:"Pinterest refresh outcome is uncertain. Do not retry refresh; reconnect Pinterest or verify the account first."});
+  if(isAmbiguousPinterestRefreshFailure(err))return res.json({connected:false,needs_reauth:true,refresh_outcome_uncertain:true,message:"Pinterest refresh outcome is uncertain. Do not retry refresh; reconnect Pinterest or verify the account first."});
   res.json({connected:false,needs_reauth:true});
 }});
 app.post("/api/pinterest/complete",(req,res,next)=>{

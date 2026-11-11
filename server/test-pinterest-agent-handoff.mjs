@@ -24,7 +24,7 @@ const realFetch = globalThis.fetch;
 const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
 const observedTimeouts = [];
 AbortSignal.timeout = (milliseconds) => { observedTimeouts.push(milliseconds); return realAbortSignalTimeout(milliseconds); };
-const observed = { credentialRequests: [], operations: [], operationHeaders: [], boardReplay: false, boardStatus: 200, boardRejected: false, refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, schedulerRequests: [] };
+const observed = { credentialRequests: [], operations: [], operationHeaders: [], boardReplay: false, boardStatus: 200, boardRejected: false, refreshRequests: [], publishRequests: [], healthStatuses: [], healthRequests: 0, storeAllowed: true, agentHealthy: true, tokenExchanges: 0, rejectFirstOperation: false, refreshStatus: 200, refreshDetail: "sanitized refresh failure", refreshNetworkFailure: false, schedulerRequests: [] };
 const fakeTokens = {
   access_token: "mock_access_token_never_returned",
   refresh_token: "mock_refresh_token_never_returned",
@@ -63,7 +63,11 @@ globalThis.fetch = async (input, init = {}) => {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
     const body = JSON.parse(init.body);
     observed.refreshRequests.push(body);
-    return new Response(JSON.stringify(observed.refreshStatus === 200 ? { refreshed: true, account_id: body.account_id } : { detail: observed.refreshStatus === 409 ? "Pinterest refresh outcome is uncertain or still in progress; automatic retry is blocked. Reconnect or verify the account before another refresh." : "sanitized refresh failure" }), { status: observed.refreshStatus, headers: { "content-type": "application/json" } });
+    if (observed.refreshNetworkFailure) {
+      observed.refreshNetworkFailure = false;
+      throw new TypeError("fetch failed");
+    }
+    return new Response(JSON.stringify(observed.refreshStatus === 200 ? { refreshed: true, account_id: body.account_id } : { detail: observed.refreshStatus === 409 ? "Pinterest refresh outcome is uncertain or still in progress; automatic retry is blocked. Reconnect or verify the account before another refresh." : observed.refreshDetail }), { status: observed.refreshStatus, headers: { "content-type": "application/json" } });
   }
   if (url === `${agentBase}/workflow/publish-hub-pin`) {
     assert.equal(new Headers(init.headers).get("x-credential-ingest-key"), process.env.PINTEREST_AGENT_INGEST_KEY);
@@ -363,7 +367,52 @@ try {
   assert.deepEqual(await failedRefreshStatus.json(), { connected: false, needs_reauth: true, refresh_outcome_uncertain: true, message: "Pinterest refresh outcome is uncertain. Do not retry refresh; reconnect Pinterest or verify the account first." });
   assert.equal(observed.refreshRequests.length, refreshCountBeforeFailure + 1, "ambiguous OAuth refresh must never be automatically replayed");
   assert.equal(observed.operations.length, operationCountBeforeFailure + 1, "do not retry the protected operation when refresh was not confirmed");
+  observed.refreshStatus = 503;
+  observed.refreshDetail = "Pinterest OAuth refresh outcome is uncertain; automatic retry is blocked.";
+  observed.rejectFirstOperation = true;
+  const refreshCountBefore5xx = observed.refreshRequests.length;
+  const operationCountBefore5xx = observed.operations.length;
+  const failedRefresh5xx = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(failedRefresh5xx.status, 200);
+  const failedRefresh5xxBody = await failedRefresh5xx.json();
+  assert.equal(failedRefresh5xxBody.refresh_outcome_uncertain, true, "5xx after refresh attempt must be surfaced as uncertain");
+  assert.equal(observed.refreshRequests.length, refreshCountBefore5xx + 1);
+  assert.equal(observed.operations.length, operationCountBefore5xx + 1, "protected operation must not replay after ambiguous 5xx refresh");
+
+  observed.refreshStatus = 503;
+  observed.refreshDetail = "Pinterest refresh ledger is unavailable; no OAuth request was sent.";
+  observed.rejectFirstOperation = true;
+  const definitiveRefreshInfrastructureFailure = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(definitiveRefreshInfrastructureFailure.status, 200);
+  assert.deepEqual(await definitiveRefreshInfrastructureFailure.json(), { connected: false, needs_reauth: true }, "pre-provider 503 must not be mislabeled as an uncertain refresh");
+
   observed.refreshStatus = 200;
+  observed.rejectFirstOperation = true;
+  observed.refreshNetworkFailure = true;
+  const refreshCountBeforeNetwork = observed.refreshRequests.length;
+  const operationCountBeforeNetwork = observed.operations.length;
+  const failedRefreshNetwork = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(failedRefreshNetwork.status, 200);
+  assert.equal((await failedRefreshNetwork.json()).refresh_outcome_uncertain, true, "transport failure during refresh must be surfaced as uncertain");
+  assert.equal(observed.refreshRequests.length, refreshCountBeforeNetwork + 1);
+  assert.equal(observed.operations.length, operationCountBeforeNetwork + 1, "protected operation must not replay after ambiguous transport failure");
+
+  observed.refreshStatus = 400;
+  observed.refreshDetail = "Pinterest rejected token refresh. Reconnect the account if the refresh token is invalid or expired.";
+  observed.rejectFirstOperation = true;
+  const definitiveRefreshFailure = await realFetch(`${localBase}/api/pinterest/status`, {
+    headers: { Authorization: `Bearer ${completeBody.session_token}` },
+  });
+  assert.equal(definitiveRefreshFailure.status, 200);
+  assert.deepEqual(await definitiveRefreshFailure.json(), { connected: false, needs_reauth: true }, "definitive 4xx must not be mislabeled as uncertain");
+  observed.refreshStatus = 200;
+  observed.refreshDetail = "sanitized refresh failure";
 
   // Disconnect is local-only in Model 2; Hub must not imply provider token revocation.
   const disconnectResponse = await realFetch(`${localBase}/api/pinterest/disconnect`, {
@@ -391,7 +440,7 @@ try {
   assert.notEqual(failedUrl.searchParams.get("pinterest_connected"), "1");
   assert.equal(observed.credentialRequests.length, 2);
 
-  console.log("PB-05/PB-04 PASS: authenticated Agent ingestion, OAuth handoff, one-time 401 refresh, no replay after ambiguous refresh 409, retry, expiry persistence, and fail-closed storage verified (mocked upstreams only).");
+  console.log("PB-05/PB-04 PASS: authenticated Agent ingestion, OAuth handoff, one-time 401 refresh, no replay after ambiguous refresh 409/5xx/transport failures, definitive error classification, retry, expiry persistence, and fail-closed storage verified (mocked upstreams only).");
 } catch (error) {
   exitCode = 1;
   console.error("PB-04 FAIL:", error?.stack || String(error));
